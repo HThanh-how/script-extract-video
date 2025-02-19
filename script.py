@@ -159,13 +159,21 @@ def rename_simple(file_path):
         audio_stream = next((stream for stream in probe['streams'] 
                            if stream['codec_type'] == 'audio'), None)
         language = 'und'  # mặc định là undefined
+        audio_title = ''
         if audio_stream:
             language = audio_stream.get('tags', {}).get('language', 'und')
+            audio_title = audio_stream.get('tags', {}).get('title', '')
         
         language_abbr = get_language_abbreviation(language)
+        # Chỉ thêm audio_title nếu khác với language_abbr và không rỗng
+        if audio_title and audio_title != language_abbr:
+            lang_part = f"{language_abbr}_{audio_title}"
+        else:
+            lang_part = language_abbr
+        
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         
-        new_name = f"{resolution_label}_{language_abbr}_{base_name}.mkv"
+        new_name = f"{resolution_label}_{lang_part}_{base_name}.mkv"
         new_name = sanitize_filename(new_name)
         
         dir_path = os.path.dirname(file_path)
@@ -276,18 +284,26 @@ def process_video(file_path, output_folder, selected_track, log_file):
         
         if first_audio:
             first_audio_lang = first_audio.get('tags', {}).get('language', 'und')
-            first_audio_title = first_audio.get('tags', {}).get('title', 
-                               get_language_abbreviation(first_audio_lang))
+            first_audio_title = first_audio.get('tags', {}).get('title', '')
+            # Sử dụng title chỉ khi khác với language abbreviation
+            first_audio_display = get_language_abbreviation(first_audio_lang)
+            if first_audio_title and first_audio_title != first_audio_display:
+                first_audio_display += f"_{first_audio_title}"
             
-            # Format tên file dựa vào điều kiện
+            # Logic tương tự cho selected track
+            selected_lang_abbr = get_language_abbreviation(selected_track[2])
+            selected_title = selected_track[3]
+            selected_display = selected_lang_abbr
+            if selected_title and selected_title != selected_lang_abbr:
+                selected_display += f"_{selected_title}"
+            
+            # Format tên file
             if first_audio_lang == 'vie':
-                # Trường hợp audio đầu tiên là tiếng Việt
-                source_name = f"{resolution_label}_{get_language_abbreviation(first_audio_lang)}_{first_audio_title}"
-                output_name = f"{resolution_label}_{get_language_abbreviation(selected_track[2])}"
+                source_name = f"{resolution_label}_{first_audio_display}"
+                output_name = f"{resolution_label}_{selected_display}"
             else:
-                # Trường hợp audio đầu tiên không phải tiếng Việt
-                source_name = f"{resolution_label}_{get_language_abbreviation(first_audio_lang)}"
-                output_name = f"{resolution_label}_{get_language_abbreviation(selected_track[2])}_{selected_track[3]}"
+                source_name = f"{resolution_label}_{first_audio_display}"
+                output_name = f"{resolution_label}_{selected_display}"
             
             # Thêm năm và tên gốc
             if year:
