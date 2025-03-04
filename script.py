@@ -186,11 +186,10 @@ def rename_simple(file_path):
         print(f"Error simple renaming file {file_path}: {e}")
         return file_path
 
-def extract_video_with_audio(file_path, vn_folder, original_folder, log_file):
+def extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data):
     """Tách video với audio theo yêu cầu."""
     try:
-        probe = ffmpeg.probe(file_path)
-        audio_streams = [stream for stream in probe['streams'] if stream['codec_type'] == 'audio']
+        audio_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'audio']
         
         if not audio_streams:
             print(f"No audio found in {file_path}. Performing simple rename.")
@@ -222,13 +221,13 @@ def extract_video_with_audio(file_path, vn_folder, original_folder, log_file):
             if non_vietnamese_tracks:
                 # Chọn audio không phải tiếng Việt có nhiều kênh nhất
                 selected_track = non_vietnamese_tracks[0]
-                process_video(file_path, original_folder, selected_track, log_file)
+                process_video(file_path, original_folder, selected_track, log_file, probe_data)
         else:
             # Trường hợp 2: Audio đầu tiên không phải tiếng Việt
             if vietnamese_tracks:
                 # Chọn audio tiếng Việt có nhiều kênh nhất
                 selected_track = vietnamese_tracks[0]
-                process_video(file_path, vn_folder, selected_track, log_file)
+                process_video(file_path, vn_folder, selected_track, log_file, probe_data)
 
     except Exception as e:
         print(f"Exception while processing {file_path}: {e}")
@@ -267,7 +266,7 @@ def rename_file(file_path, audio_info, is_output=False):
         print(f"Error renaming file {file_path}: {e}")
         return file_path
 
-def process_video(file_path, output_folder, selected_track, log_file):
+def process_video(file_path, output_folder, selected_track, log_file, probe_data):
     """Xử lý video với track audio đã chọn và trích xuất subtitle."""
     try:
         original_filename = os.path.basename(file_path)
@@ -278,8 +277,7 @@ def process_video(file_path, output_folder, selected_track, log_file):
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         
         # Lấy thông tin audio đầu tiên
-        probe = ffmpeg.probe(file_path)
-        first_audio = next((stream for stream in probe['streams'] 
+        first_audio = next((stream for stream in probe_data['streams'] 
                           if stream['codec_type'] == 'audio'), None)
         
         if first_audio:
@@ -354,7 +352,7 @@ def process_video(file_path, output_folder, selected_track, log_file):
         print(f"Exception while processing {file_path}: {e}")
         return False
 
-def extract_subtitle(file_path, subtitle_info, log_file):
+def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
     """Trích xuất subtitle tiếng Việt từ file video."""
     try:
         # Tạo thư mục C:\Subtitles nếu chưa tồn tại
@@ -474,12 +472,12 @@ def main():
 
             # Đọc thông tin file một lần duy nhất
             try:
-                probe = ffmpeg.probe(file_path)
-                audio_streams = [stream for stream in probe['streams'] if stream['codec_type'] == 'audio']
-                subtitle_streams = [stream for stream in probe['streams'] if stream['codec_type'] == 'subtitle']
+                probe_data = ffmpeg.probe(file_path)
+                audio_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'audio']
+                subtitle_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'subtitle']
             except Exception as e:
                 print(f"Error probing file {file_path}: {e}")
-                continue
+                continue 
 
             # Kiểm tra subtitle và audio tiếng Việt
             has_vie_subtitle = any(stream.get('tags', {}).get('language', 'und') == 'vie' 
@@ -497,7 +495,7 @@ def main():
                             stream.get('tags', {}).get('title', ''),
                             stream.get('codec_name', '')
                         )
-                        extract_subtitle(file_path, subtitle_info, log_file)
+                        extract_subtitle(file_path, subtitle_info, log_file, probe_data)
 
             # Nếu không có cả subtitle và audio tiếng Việt
             if not has_vie_subtitle and not has_vie_audio:
@@ -517,7 +515,7 @@ def main():
                     # Sắp xếp theo số kênh giảm dần
                     vie_audio_tracks.sort(key=lambda x: x[1], reverse=True)
                     selected_track = vie_audio_tracks[0]
-                    extract_video_with_audio(file_path, vn_folder, original_folder, log_file)
+                    extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data)
 
     except Exception as e:
         print(f"Error accessing input folder '{input_folder}': {e}")
