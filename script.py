@@ -437,6 +437,15 @@ def get_file_signature(file_path):
         print(f"Error getting file signature: {e}")
         return None
 
+def check_ffmpeg_available():
+    """Kiểm tra FFmpeg có sẵn trong hệ thống"""
+    try:
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("Error: FFmpeg is not installed or not found in PATH")
+        return False
+
 def main():
     if not check_ffmpeg_available():
         return
