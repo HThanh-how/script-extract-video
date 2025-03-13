@@ -486,6 +486,12 @@ def main():
                 subtitle_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'subtitle']
             except Exception as e:
                 print(f"Error probing file {file_path}: {e}")
+                # Nếu không thể đọc thông tin file, vẫn thử rename đơn giản
+                try:
+                    new_path = rename_simple(file_path)
+                    log_processed_file(log_file, mkv_file, os.path.basename(new_path))
+                except Exception as rename_err:
+                    print(f"Failed to rename: {rename_err}")
                 continue 
 
             # Kiểm tra subtitle và audio tiếng Việt
@@ -493,6 +499,8 @@ def main():
                                  for stream in subtitle_streams)
             has_vie_audio = any(stream.get('tags', {}).get('language', 'und') == 'vie' 
                                for stream in audio_streams)
+
+            processed = False  # Flag để đánh dấu file đã được xử lý
 
             # Xử lý subtitle tiếng Việt nếu có
             if has_vie_subtitle:
@@ -506,25 +514,31 @@ def main():
                         )
                         extract_subtitle(file_path, subtitle_info, log_file, probe_data)
 
-            # Nếu không có cả subtitle và audio tiếng Việt
-            if not has_vie_subtitle and not has_vie_audio:
-                print(f"No Vietnamese subtitle and audio found. Renaming file...")
-                new_path = rename_simple(file_path)
-                log_processed_file(log_file, mkv_file, os.path.basename(new_path))
-                continue
-
             # Xử lý video nếu có audio tiếng Việt
             if has_vie_audio:
-                # Tìm audio track tiếng Việt có nhiều kênh nhất
-                vie_audio_tracks = [(i, stream.get('channels', 0), 'vie', 
-                                   stream.get('tags', {}).get('title', 'VIE'))
-                                  for i, stream in enumerate(audio_streams)
-                                  if stream.get('tags', {}).get('language', 'und') == 'vie']
-                if vie_audio_tracks:
-                    # Sắp xếp theo số kênh giảm dần
-                    vie_audio_tracks.sort(key=lambda x: x[1], reverse=True)
-                    selected_track = vie_audio_tracks[0]
-                    extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data)
+                try:
+                    # Tìm audio track tiếng Việt có nhiều kênh nhất
+                    vie_audio_tracks = [(i, stream.get('channels', 0), 'vie', 
+                                      stream.get('tags', {}).get('title', 'VIE'))
+                                      for i, stream in enumerate(audio_streams)
+                                      if stream.get('tags', {}).get('language', 'und') == 'vie']
+                    if vie_audio_tracks:
+                        # Sắp xếp theo số kênh giảm dần
+                        vie_audio_tracks.sort(key=lambda x: x[1], reverse=True)
+                        selected_track = vie_audio_tracks[0]
+                        extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data)
+                        processed = True  # Đánh dấu file đã được xử lý
+                except Exception as e:
+                    print(f"Error processing audio: {e}")
+
+            # Nếu không có cả subtitle và audio tiếng Việt HOẶC xử lý audio thất bại
+            if (not has_vie_subtitle and not has_vie_audio) or not processed:
+                print(f"No Vietnamese subtitle and audio found or processing failed. Renaming file...")
+                try:
+                    new_path = rename_simple(file_path)
+                    log_processed_file(log_file, mkv_file, os.path.basename(new_path))
+                except Exception as rename_err:
+                    print(f"Failed to rename: {rename_err}")
 
     except Exception as e:
         print(f"Error accessing input folder '{input_folder}': {e}")
