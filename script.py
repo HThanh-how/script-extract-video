@@ -355,8 +355,8 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
 def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
     """Trích xuất subtitle tiếng Việt từ file video."""
     try:
-        # Tạo thư mục C:\Subtitles nếu chưa tồn tại
-        sub_root_folder = r"C:\Subtitles"
+        # Tạo thư mục ./Subtitles nếu chưa tồn tại
+        sub_root_folder = os.path.join(".", "Subtitles")
         create_folder(sub_root_folder)
         
         index, language, title, codec = subtitle_info
@@ -452,10 +452,11 @@ def main():
     input_folder = "."  # Folder hiện tại
     vn_folder = "Lồng Tiếng - Thuyết Minh"
     original_folder = "Original"
-    log_file = os.path.join(r"C:\Subtitles", "processed_files.log")
+    log_file = os.path.join(".", "Subtitles", "processed_files.log")
 
     create_folder(vn_folder)
     create_folder(original_folder)
+    create_folder(os.path.join(".", "Subtitles"))
 
     # Đọc danh sách file đã xử lý
     processed_files, processed_signatures = read_processed_files(log_file)
