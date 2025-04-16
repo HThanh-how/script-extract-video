@@ -3,6 +3,33 @@ import subprocess
 import ffmpeg
 import re
 import datetime
+import sys
+import importlib
+
+def check_and_install_libraries():
+    """Kiểm tra và cài đặt các thư viện cần thiết."""
+    required_packages = {
+        'ffmpeg-python': 'ffmpeg'
+    }
+    
+    need_restart = False
+    
+    for package_name, import_name in required_packages.items():
+        try:
+            importlib.import_module(import_name)
+            print(f"Thư viện {import_name} đã được cài đặt.")
+        except ImportError:
+            print(f"Đang cài đặt thư viện {package_name}...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+                print(f"Đã cài đặt thành công {package_name}.")
+                need_restart = True
+            except Exception as e:
+                print(f"Lỗi khi cài đặt {package_name}: {e}")
+    
+    if need_restart:
+        print("Đã cài đặt các thư viện cần thiết. Vui lòng chạy lại script.")
+        sys.exit(0)
 
 def create_folder(folder_name):
     """Tạo folder nếu chưa tồn tại."""
@@ -447,6 +474,7 @@ def check_ffmpeg_available():
         return False
 
 def main():
+    check_and_install_libraries()
     if not check_ffmpeg_available():
         return
     input_folder = "."  # Folder hiện tại
