@@ -1,12 +1,28 @@
 import os
 import subprocess
-import ffmpeg
+import sys
+
+# Ensure ffmpeg-python is installed before import
+try:
+    import ffmpeg
+except ImportError:
+    print("Đang cài đặt thư viện ffmpeg-python...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "ffmpeg-python"])
+    import ffmpeg
+
 import re
 import datetime
-import sys
 import importlib
 import tempfile
-import psutil
+
+# Ensure psutil is installed before import
+try:
+    import psutil
+except ImportError:
+    print("Đang cài đặt thư viện psutil...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "psutil"])
+    import psutil
+
 import io
 import shutil
 from contextlib import contextmanager
