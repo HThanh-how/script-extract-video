@@ -561,7 +561,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
         # Chỉ xử lý subtitle và định dạng text-based
         text_based_codecs = ['srt', 'ass', 'ssa', 'subrip']
         if codec.lower() not in text_based_codecs:
-            print(f"Skipping subtitle extraction: format {codec} is not supported (must be text-based).")
+            print(f"Bỏ qua subtitle: định dạng {codec} không được hỗ trợ (chỉ hỗ trợ text-based)")
             return False
             
         base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -579,7 +579,57 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
             print(f"Subtitle đã tồn tại: {final_output_path}. Bỏ qua.")
             return True
         
-        # Xử lý trực tiếp vào thư mục đích để tránh lỗi về dung lượng
+        # Kiểm tra RAM khả dụng - subtitle thường nhỏ nên yêu cầu ít RAM hơn
+        available_ram = check_available_ram()
+        print(f"Xử lý subtitle với {available_ram:.2f} GB RAM khả dụng")
+        
+        # Ưu tiên xử lý trong RAM nếu có đủ RAM (>= 0.5GB)
+        try_ram_first = available_ram >= 0.5
+        
+        if try_ram_first:
+            print(f"Thử trích xuất subtitle trong RAM...")
+            
+            # Xử lý trong RAM
+            ram_success = False
+            try:
+                with temp_directory_in_memory(use_ram=True) as temp_dir:
+                    # Đường dẫn tạm thời trong RAM
+                    temp_output_path = os.path.join(temp_dir, sub_filename)
+                    
+                    # Lệnh ffmpeg để trích xuất subtitle vào RAM
+                    cmd = [
+                        'ffmpeg',
+                        '-i', file_path,
+                        '-map', f'0:{index}',
+                        '-c:s', 'srt',
+                        '-y',
+                        temp_output_path
+                    ]
+                    
+                    print(f"Đang chạy lệnh trong RAM: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True)
+                    
+                    if result.returncode == 0 and os.path.exists(temp_output_path):
+                        print(f"Trích xuất trong RAM thành công. Di chuyển file tới: {final_output_path}")
+                        # Chuyển từ RAM sang ổ đĩa
+                        shutil.copy2(temp_output_path, final_output_path)
+                        ram_success = True
+            except Exception as ram_error:
+                print(f"Lỗi khi xử lý trong RAM: {ram_error}")
+                
+            # Nếu xử lý trong RAM thành công
+            if ram_success and os.path.exists(final_output_path):
+                print(f"Subtitle đã được lưu thành công tới: {final_output_path}")
+                
+                # Ghi vào log
+                log_processed_file(log_file, os.path.basename(file_path), sub_filename)
+                return True
+            else:
+                print("Xử lý trong RAM thất bại. Chuyển sang xử lý trực tiếp trên ổ đĩa...")
+        else:
+            print(f"Không đủ RAM để xử lý. Xử lý trực tiếp trên ổ đĩa.")
+        
+        # Xử lý trực tiếp vào thư mục đích nếu không thể xử lý trong RAM
         print(f"Trích xuất subtitle trực tiếp vào: {final_output_path}")
         
         # Lệnh ffmpeg để trích xuất subtitle
@@ -592,7 +642,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
             final_output_path
         ]
         
-        print(f"Thực thi lệnh: {' '.join(cmd)}")
+        print(f"Đang chạy lệnh trên ổ đĩa: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True)
         
         if result.returncode == 0 and os.path.exists(final_output_path):
@@ -602,10 +652,10 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
             log_processed_file(log_file, os.path.basename(file_path), sub_filename)
             return True
         else:
-            print("Lỗi khi trích xuất subtitle")
+            print("Lỗi khi trích xuất subtitle trực tiếp")
             if result.stderr:
                 stderr_text = result.stderr.decode('utf-8', errors='replace')
-                print(f"Error: {stderr_text}")
+                print(f"Lỗi: {stderr_text}")
             
             # Thử phương pháp khác nếu cách trên thất bại
             print("Thử phương pháp thay thế để trích xuất subtitle...")
@@ -621,7 +671,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
                     temp_output_path
                 ]
                 
-                print(f"Thực thi lệnh thay thế: {' '.join(alt_cmd)}")
+                print(f"Đang chạy lệnh thay thế: {' '.join(alt_cmd)}")
                 alt_result = subprocess.run(alt_cmd, capture_output=True)
                 
                 if alt_result.returncode == 0 and os.path.exists(temp_output_path):
@@ -637,7 +687,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
                     print("Không thể trích xuất subtitle bằng cả hai phương pháp")
                     if alt_result.stderr:
                         stderr_text = alt_result.stderr.decode('utf-8', errors='replace')
-                        print(f"Error: {stderr_text}")
+                        print(f"Lỗi: {stderr_text}")
                     return False
     except Exception as e:
         print(f"Lỗi khi trích xuất subtitle: {e}")
