@@ -1,57 +1,78 @@
 import os
-import subprocess
 import sys
+import subprocess
 
-# Ensure ffmpeg-python is installed before import
-try:
-    import ffmpeg
-except ImportError:
-    print("Đang cài đặt thư viện ffmpeg-python...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "ffmpeg-python"])
-    import ffmpeg
+# Thiết lập và kích hoạt virtual environment, cài đặt các package cần thiết
+if __name__ == '__main__' and not os.environ.get('VENV_ACTIVE'):
+    venv_dir = os.path.join(os.getcwd(), 'venv')
+    if not os.path.isdir(venv_dir):
+        print('Tạo môi trường ảo trong venv...')
+        try:
+            # Kiểm tra nếu python3-venv được cài đặt
+            subprocess.check_call([sys.executable, '-m', 'venv', '--help'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            print('Chưa cài đặt python3-venv. Cài đặt trước khi tiếp tục...')
+            if os.name == 'posix':  # Linux/macOS
+                try:
+                    if os.path.exists('/usr/bin/apt'):  # Debian/Ubuntu
+                        subprocess.check_call(['apt', 'update'])
+                        subprocess.check_call(['apt', 'install', '-y', 'python3-venv', 'python3-full'])
+                    elif os.path.exists('/usr/bin/dnf'):  # Fedora
+                        subprocess.check_call(['dnf', 'install', '-y', 'python3-venv'])
+                    elif os.path.exists('/usr/bin/yum'):  # CentOS/RHEL
+                        subprocess.check_call(['yum', 'install', '-y', 'python3-venv'])
+                except subprocess.CalledProcessError:
+                    print('Vui lòng cài đặt python3-venv và python3-full thủ công:')
+                    print('Ví dụ: sudo apt install -y python3-venv python3-full')
+                    sys.exit(1)
+        
+        try:
+            subprocess.check_call([sys.executable, '-m', 'venv', venv_dir])
+        except subprocess.CalledProcessError:
+            print('Không thể tạo môi trường ảo. Vui lòng cài đặt python3-full và thử lại.')
+            print('Ví dụ: sudo apt install -y python3-full')
+            sys.exit(1)
+    
+    venv_python = os.path.join(venv_dir, 'bin', 'python')
+    venv_pip = os.path.join(venv_dir, 'bin', 'pip')
+    
+    try:
+        print('Nâng cấp pip...')
+        subprocess.check_call([venv_pip, 'install', '--upgrade', 'pip'])
+        print('Cài đặt thư viện cần thiết...')
+        subprocess.check_call([venv_pip, 'install', 'ffmpeg-python', 'psutil'])
+        
+        # Kiểm tra ffmpeg trên hệ thống
+        try:
+            subprocess.check_call(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print('CẢNH BÁO: FFmpeg chưa được cài đặt trên hệ thống.')
+            print('Script này yêu cầu FFmpeg để xử lý video.')
+            print('Vui lòng cài đặt FFmpeg trước khi chạy script:')
+            print('Ví dụ: sudo apt install -y ffmpeg')
+            
+        # Thiết lập biến môi trường để tránh lặp
+        new_env = os.environ.copy()
+        new_env['VENV_ACTIVE'] = '1'
+        print('Khởi động lại script với virtual environment...')
+        os.execve(venv_python, [venv_python] + sys.argv, new_env)
+    except Exception as e:
+        print(f'Lỗi khi cài đặt các thư viện: {e}')
+        print('Vui lòng thử chạy thủ công:')
+        print(f'{venv_pip} install --upgrade pip')
+        print(f'{venv_pip} install ffmpeg-python psutil')
+        sys.exit(1)
+
+# Import sau khi đã chắc chắn chạy trong venv
+import ffmpeg
+import psutil
 
 import re
 import datetime
-import importlib
 import tempfile
-
-# Ensure psutil is installed before import
-try:
-    import psutil
-except ImportError:
-    print("Đang cài đặt thư viện psutil...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "psutil"])
-    import psutil
-
 import io
 import shutil
 from contextlib import contextmanager
-
-def check_and_install_libraries():
-    """Kiểm tra và cài đặt các thư viện cần thiết."""
-    required_packages = {
-        'ffmpeg-python': 'ffmpeg',
-        'psutil': 'psutil'
-    }
-    
-    need_restart = False
-    
-    for package_name, import_name in required_packages.items():
-        try:
-            importlib.import_module(import_name)
-            print(f"Thư viện {import_name} đã được cài đặt.")
-        except ImportError:
-            print(f"Đang cài đặt thư viện {package_name}...")
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
-                print(f"Đã cài đặt thành công {package_name}.")
-                need_restart = True
-            except Exception as e:
-                print(f"Lỗi khi cài đặt {package_name}: {e}")
-    
-    if need_restart:
-        print("Đã cài đặt các thư viện cần thiết. Vui lòng chạy lại script.")
-        sys.exit(0)
 
 def create_folder(folder_name):
     """Tạo folder nếu chưa tồn tại."""
@@ -600,7 +621,6 @@ def temp_directory_in_memory(use_ram=True):
             yield temp_dir
 
 def main():
-    check_and_install_libraries()
     if not check_ffmpeg_available():
         return
     input_folder = "."  # Folder hiện tại
