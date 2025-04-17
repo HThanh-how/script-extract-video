@@ -3,152 +3,112 @@ import sys
 import subprocess
 import platform
 
-# Thiết lập và kích hoạt virtual environment, cài đặt các package cần thiết
-if __name__ == '__main__' and not os.environ.get('VENV_ACTIVE'):
-    venv_dir = os.path.join(os.getcwd(), 'venv')
-    if not os.path.isdir(venv_dir):
-        print('Tạo môi trường ảo trong venv...')
-        try:
-            # Kiểm tra nếu venv module được hỗ trợ
-            try:
-                import venv
-                has_venv = True
-            except ImportError:
-                has_venv = False
-            
-            if has_venv:
-                # Sử dụng venv module trực tiếp
-                import venv
-                venv.create(venv_dir, with_pip=True)
-                print('Đã tạo môi trường ảo bằng venv module')
-            else:
-                # Sử dụng virtualenv nếu venv không khả dụng
-                try:
-                    # Kiểm tra nếu virtualenv đã được cài đặt
-                    subprocess.check_call([sys.executable, '-m', 'pip', 'show', 'virtualenv'], 
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    print('Đang cài đặt virtualenv...')
-                    try:
-                        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', 'virtualenv'])
-                    except subprocess.CalledProcessError:
-                        print('Không thể cài đặt virtualenv. Thử sử dụng --break-system-packages...')
-                        try:
-                            subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', 'virtualenv', '--break-system-packages'])
-                        except subprocess.CalledProcessError:
-                            print('Không thể cài đặt virtualenv. Vui lòng cài đặt thủ công.')
-                            sys.exit(1)
-                
-                # Tạo môi trường ảo với virtualenv
-                print('Tạo môi trường ảo bằng virtualenv...')
-                subprocess.check_call([sys.executable, '-m', 'virtualenv', venv_dir])
-        except Exception as e:
-            print(f'Lỗi khi tạo môi trường ảo: {e}')
-            print('Cố gắng cài đặt các thư viện trực tiếp...')
-            
-            # Cố gắng cài đặt các gói trực tiếp nếu không thể tạo venv
-            try:
-                subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ffmpeg-python', 'psutil'])
-                # Import và chạy script trực tiếp
-                try:
-                    import ffmpeg
-                    import psutil
-                    print('Đã cài đặt các gói cần thiết trực tiếp.')
-                    # Thiết lập biến môi trường để tránh lặp
-                    os.environ['VENV_ACTIVE'] = '1'
-                    # Tiếp tục chạy script
-                except ImportError as imp_err:
-                    print(f'Vẫn không thể import các gói cần thiết: {imp_err}')
-                    sys.exit(1)
-            except subprocess.CalledProcessError:
-                print('Thử cài đặt với --break-system-packages...')
-                try:
-                    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ffmpeg-python', 'psutil', '--break-system-packages'])
-                    # Import và chạy script trực tiếp
-                    try:
-                        import ffmpeg
-                        import psutil
-                        print('Đã cài đặt các gói cần thiết trực tiếp với --break-system-packages.')
-                        # Thiết lập biến môi trường để tránh lặp
-                        os.environ['VENV_ACTIVE'] = '1'
-                        # Tiếp tục chạy script
-                    except ImportError as imp_err:
-                        print(f'Vẫn không thể import các gói cần thiết: {imp_err}')
-                        sys.exit(1)
-                except subprocess.CalledProcessError:
-                    print('Không thể cài đặt các gói cần thiết.')
-                    print('Vui lòng thử cài đặt thủ công:')
-                    print(f'{sys.executable} -m pip install ffmpeg-python psutil --user')
-                    sys.exit(1)
-    else:
-        # Nếu venv đã tồn tại
-        print(f'Môi trường ảo {venv_dir} đã tồn tại.')
-    
-    # Xác định đường dẫn python và pip trong môi trường ảo
-    is_windows = platform.system() == 'Windows'
-    bin_dir = 'Scripts' if is_windows else 'bin'
-    venv_python = os.path.join(venv_dir, bin_dir, 'python' + ('.exe' if is_windows else ''))
-    venv_pip = os.path.join(venv_dir, bin_dir, 'pip' + ('.exe' if is_windows else ''))
-    
-    if not os.path.exists(venv_python):
-        print(f'Không tìm thấy Python trong môi trường ảo: {venv_python}')
-        print(f'Các tệp có trong thư mục: {os.listdir(os.path.join(venv_dir, bin_dir))}')
-        sys.exit(1)
-    
+# Kiểm tra và hướng dẫn cài đặt các package cần thiết
+if __name__ == '__main__':
     try:
-        print('Nâng cấp pip...')
-        subprocess.check_call([venv_pip, 'install', '--upgrade', 'pip'])
-        print('Cài đặt thư viện cần thiết...')
-        subprocess.check_call([venv_pip, 'install', 'ffmpeg-python', 'psutil'])
-        
-        # Kiểm tra ffmpeg trên hệ thống
-        ffmpeg_installed = False
+        # Thử import các module cần thiết
         try:
-            # Kiểm tra lệnh ffmpeg có sẵn không
+            import ffmpeg
+            import psutil
+            # Nếu import thành công, tiếp tục chạy script
+            print("Đã tìm thấy các thư viện cần thiết.")
+        except ImportError as e:
+            # Nếu không import được, hiển thị hướng dẫn cài đặt
+            print(f"\n{'='*50}")
+            print("HƯỚNG DẪN CÀI ĐẶT THƯ VIỆN".center(50))
+            print(f"{'='*50}")
+            print(f"\nKhông thể tìm thấy thư viện: {e}")
+            print("\nVui lòng cài đặt các thư viện cần thiết bằng một trong các cách sau:")
+            
+            # Hướng dẫn cài đặt trên hệ thống Linux
+            if platform.system() == "Linux":
+                print("\n--- CHO UBUNTU/DEBIAN ---")
+                print("1. Cài đặt python3-pip và ffmpeg:")
+                print("   sudo apt update")
+                print("   sudo apt install -y python3-pip ffmpeg")
+                print("\n2. Cài đặt các thư viện Python:")
+                print("   python3 -m pip install ffmpeg-python psutil --user")
+                
+                print("\n--- CHO FEDORA/RHEL ---")
+                print("1. Cài đặt python3-pip và ffmpeg:")
+                print("   sudo dnf install -y python3-pip ffmpeg")
+                print("\n2. Cài đặt các thư viện Python:")
+                print("   python3 -m pip install ffmpeg-python psutil --user")
+                
+                print("\n--- SỬ DỤNG SNAP (NẾU CÓ) ---")
+                print("1. Cài đặt ffmpeg qua snap:")
+                print("   sudo snap install ffmpeg")
+            
+            # Hướng dẫn cài đặt trên MacOS
+            elif platform.system() == "Darwin":
+                print("\n--- CHO MACOS ---")
+                print("1. Cài đặt Homebrew (nếu chưa có):")
+                print("   /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"")
+                print("\n2. Cài đặt ffmpeg:")
+                print("   brew install ffmpeg")
+                print("\n3. Cài đặt các thư viện Python:")
+                print("   pip3 install ffmpeg-python psutil")
+            
+            # Hướng dẫn cài đặt trên Windows
+            elif platform.system() == "Windows":
+                print("\n--- CHO WINDOWS ---")
+                print("1. Tải và cài đặt FFmpeg từ trang chủ:")
+                print("   https://ffmpeg.org/download.html")
+                print("\n2. Thêm đường dẫn FFmpeg vào biến môi trường PATH")
+                print("\n3. Cài đặt các thư viện Python:")
+                print("   pip install ffmpeg-python psutil")
+            
+            # Hướng dẫn chung
+            print("\n--- CÁCH NHANH NHẤT (TẤT CẢ HỆ ĐIỀU HÀNH) ---")
+            print("Sử dụng môi trường ảo (khuyến nghị):")
+            print("1. Tạo môi trường ảo:")
+            print("   python3 -m venv venv")
+            print("\n2. Kích hoạt môi trường ảo:")
+            print("   - Linux/MacOS: source venv/bin/activate")
+            print("   - Windows: venv\\Scripts\\activate")
+            print("\n3. Cài đặt các thư viện:")
+            print("   pip install ffmpeg-python psutil")
+            print("\n4. Chạy script trong môi trường ảo:")
+            print("   python script.py")
+            
+            print(f"\n{'='*50}")
+            print("LƯU Ý: Script này cần FFmpeg để xử lý video.")
+            print("Vui lòng đảm bảo FFmpeg đã được cài đặt và có sẵn trong PATH")
+            
+            sys.exit(1)
+            
+        # Kiểm tra FFmpeg đã được cài đặt chưa
+        try:
             subprocess.check_call(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            ffmpeg_installed = True
+            print("Đã tìm thấy FFmpeg trên hệ thống.")
         except (subprocess.CalledProcessError, FileNotFoundError):
-            # Kiểm tra ffmpeg qua snap
-            try:
-                subprocess.check_call(['snap', 'info', 'ffmpeg'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print('Phát hiện snap. Đang cài đặt ffmpeg thông qua snap...')
-                subprocess.check_call(['snap', 'install', 'ffmpeg'])
-                ffmpeg_installed = True
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                print('CẢNH BÁO: FFmpeg chưa được cài đặt trên hệ thống.')
-                print('Script này yêu cầu FFmpeg để xử lý video.')
-                print('Vui lòng cài đặt FFmpeg thủ công:')
-                print('- Trên Ubuntu: sudo apt install -y ffmpeg')
-                print('- Sử dụng snap: sudo snap install ffmpeg')
-                print('- Trên macOS: brew install ffmpeg')
-                print('- Tải từ trang chủ: https://ffmpeg.org/download.html')
-        
-        if not ffmpeg_installed:
-            print('\nCẢNH BÁO: Script có thể không hoạt động đúng nếu không có FFmpeg!')
-            response = input("Bạn có muốn tiếp tục mà không có FFmpeg không? (y/n): ")
+            print("\nCẢNH BÁO: Không tìm thấy FFmpeg trên hệ thống!")
+            print("Script này yêu cầu FFmpeg để xử lý video.")
+            
+            print("\nHướng dẫn cài đặt FFmpeg:")
+            if platform.system() == "Linux":
+                print("- Ubuntu/Debian: sudo add-apt-repository universe && sudo apt update && sudo apt install -y ffmpeg")
+                print("- Fedora/RHEL: sudo dnf install -y ffmpeg")
+                print("- Sử dụng snap: sudo snap install ffmpeg")
+            elif platform.system() == "Darwin":
+                print("- macOS: brew install ffmpeg")
+            elif platform.system() == "Windows":
+                print("- Windows: Tải từ https://ffmpeg.org/download.html và thêm vào PATH")
+            
+            response = input("\nBạn có muốn tiếp tục mà không có FFmpeg không? (y/n): ")
             if response.lower() != 'y':
                 sys.exit(1)
+                
+        # Nếu mọi thứ đã sẵn sàng, tiếp tục thực hiện script
+        print("\nMọi thư viện đã sẵn sàng. Bắt đầu xử lý...")
         
-        # Thiết lập biến môi trường để tránh lặp
-        new_env = os.environ.copy()
-        new_env['VENV_ACTIVE'] = '1'
-        print('Khởi động lại script với virtual environment...')
-        os.execve(venv_python, [venv_python] + sys.argv, new_env)
     except Exception as e:
-        print(f'Lỗi khi cài đặt các thư viện: {e}')
-        print('Vui lòng thử chạy thủ công:')
-        print(f'{venv_pip} install --upgrade pip')
-        print(f'{venv_pip} install ffmpeg-python psutil')
+        print(f"Lỗi: {e}")
         sys.exit(1)
 
-# Import sau khi đã chắc chắn chạy trong venv
-try:
-    import ffmpeg
-    import psutil
-except ImportError as e:
-    print(f"Lỗi khi import thư viện cần thiết: {e}")
-    print("Vui lòng chắc chắn các thư viện đã được cài đặt đúng cách.")
-    sys.exit(1)
+# Import các thư viện cần thiết
+import ffmpeg
+import psutil
 
 import re
 import datetime
