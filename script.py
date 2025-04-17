@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import platform
 
 # Thiết lập và kích hoạt virtual environment, cài đặt các package cần thiết
 if __name__ == '__main__' and not os.environ.get('VENV_ACTIVE'):
@@ -8,33 +9,91 @@ if __name__ == '__main__' and not os.environ.get('VENV_ACTIVE'):
     if not os.path.isdir(venv_dir):
         print('Tạo môi trường ảo trong venv...')
         try:
-            # Kiểm tra nếu python3-venv được cài đặt
-            subprocess.check_call([sys.executable, '-m', 'venv', '--help'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except subprocess.CalledProcessError:
-            print('Chưa cài đặt python3-venv. Cài đặt trước khi tiếp tục...')
-            if os.name == 'posix':  # Linux/macOS
+            # Kiểm tra nếu venv module được hỗ trợ
+            try:
+                import venv
+                has_venv = True
+            except ImportError:
+                has_venv = False
+            
+            if has_venv:
+                # Sử dụng venv module trực tiếp
+                import venv
+                venv.create(venv_dir, with_pip=True)
+                print('Đã tạo môi trường ảo bằng venv module')
+            else:
+                # Sử dụng virtualenv nếu venv không khả dụng
                 try:
-                    if os.path.exists('/usr/bin/apt'):  # Debian/Ubuntu
-                        subprocess.check_call(['apt', 'update'])
-                        subprocess.check_call(['apt', 'install', '-y', 'python3-venv', 'python3-full'])
-                    elif os.path.exists('/usr/bin/dnf'):  # Fedora
-                        subprocess.check_call(['dnf', 'install', '-y', 'python3-venv'])
-                    elif os.path.exists('/usr/bin/yum'):  # CentOS/RHEL
-                        subprocess.check_call(['yum', 'install', '-y', 'python3-venv'])
-                except subprocess.CalledProcessError:
-                    print('Vui lòng cài đặt python3-venv và python3-full thủ công:')
-                    print('Ví dụ: sudo apt install -y python3-venv python3-full')
+                    # Kiểm tra nếu virtualenv đã được cài đặt
+                    subprocess.check_call([sys.executable, '-m', 'pip', 'show', 'virtualenv'], 
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    print('Đang cài đặt virtualenv...')
+                    try:
+                        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', 'virtualenv'])
+                    except subprocess.CalledProcessError:
+                        print('Không thể cài đặt virtualenv. Thử sử dụng --break-system-packages...')
+                        try:
+                            subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', 'virtualenv', '--break-system-packages'])
+                        except subprocess.CalledProcessError:
+                            print('Không thể cài đặt virtualenv. Vui lòng cài đặt thủ công.')
+                            sys.exit(1)
+                
+                # Tạo môi trường ảo với virtualenv
+                print('Tạo môi trường ảo bằng virtualenv...')
+                subprocess.check_call([sys.executable, '-m', 'virtualenv', venv_dir])
+        except Exception as e:
+            print(f'Lỗi khi tạo môi trường ảo: {e}')
+            print('Cố gắng cài đặt các thư viện trực tiếp...')
+            
+            # Cố gắng cài đặt các gói trực tiếp nếu không thể tạo venv
+            try:
+                subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ffmpeg-python', 'psutil'])
+                # Import và chạy script trực tiếp
+                try:
+                    import ffmpeg
+                    import psutil
+                    print('Đã cài đặt các gói cần thiết trực tiếp.')
+                    # Thiết lập biến môi trường để tránh lặp
+                    os.environ['VENV_ACTIVE'] = '1'
+                    # Tiếp tục chạy script
+                except ImportError as imp_err:
+                    print(f'Vẫn không thể import các gói cần thiết: {imp_err}')
                     sys.exit(1)
-        
-        try:
-            subprocess.check_call([sys.executable, '-m', 'venv', venv_dir])
-        except subprocess.CalledProcessError:
-            print('Không thể tạo môi trường ảo. Vui lòng cài đặt python3-full và thử lại.')
-            print('Ví dụ: sudo apt install -y python3-full')
-            sys.exit(1)
+            except subprocess.CalledProcessError:
+                print('Thử cài đặt với --break-system-packages...')
+                try:
+                    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'ffmpeg-python', 'psutil', '--break-system-packages'])
+                    # Import và chạy script trực tiếp
+                    try:
+                        import ffmpeg
+                        import psutil
+                        print('Đã cài đặt các gói cần thiết trực tiếp với --break-system-packages.')
+                        # Thiết lập biến môi trường để tránh lặp
+                        os.environ['VENV_ACTIVE'] = '1'
+                        # Tiếp tục chạy script
+                    except ImportError as imp_err:
+                        print(f'Vẫn không thể import các gói cần thiết: {imp_err}')
+                        sys.exit(1)
+                except subprocess.CalledProcessError:
+                    print('Không thể cài đặt các gói cần thiết.')
+                    print('Vui lòng thử cài đặt thủ công:')
+                    print(f'{sys.executable} -m pip install ffmpeg-python psutil --user')
+                    sys.exit(1)
+    else:
+        # Nếu venv đã tồn tại
+        print(f'Môi trường ảo {venv_dir} đã tồn tại.')
     
-    venv_python = os.path.join(venv_dir, 'bin', 'python')
-    venv_pip = os.path.join(venv_dir, 'bin', 'pip')
+    # Xác định đường dẫn python và pip trong môi trường ảo
+    is_windows = platform.system() == 'Windows'
+    bin_dir = 'Scripts' if is_windows else 'bin'
+    venv_python = os.path.join(venv_dir, bin_dir, 'python' + ('.exe' if is_windows else ''))
+    venv_pip = os.path.join(venv_dir, bin_dir, 'pip' + ('.exe' if is_windows else ''))
+    
+    if not os.path.exists(venv_python):
+        print(f'Không tìm thấy Python trong môi trường ảo: {venv_python}')
+        print(f'Các tệp có trong thư mục: {os.listdir(os.path.join(venv_dir, bin_dir))}')
+        sys.exit(1)
     
     try:
         print('Nâng cấp pip...')
@@ -43,14 +102,33 @@ if __name__ == '__main__' and not os.environ.get('VENV_ACTIVE'):
         subprocess.check_call([venv_pip, 'install', 'ffmpeg-python', 'psutil'])
         
         # Kiểm tra ffmpeg trên hệ thống
+        ffmpeg_installed = False
         try:
+            # Kiểm tra lệnh ffmpeg có sẵn không
             subprocess.check_call(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ffmpeg_installed = True
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print('CẢNH BÁO: FFmpeg chưa được cài đặt trên hệ thống.')
-            print('Script này yêu cầu FFmpeg để xử lý video.')
-            print('Vui lòng cài đặt FFmpeg trước khi chạy script:')
-            print('Ví dụ: sudo apt install -y ffmpeg')
-            
+            # Kiểm tra ffmpeg qua snap
+            try:
+                subprocess.check_call(['snap', 'info', 'ffmpeg'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print('Phát hiện snap. Đang cài đặt ffmpeg thông qua snap...')
+                subprocess.check_call(['snap', 'install', 'ffmpeg'])
+                ffmpeg_installed = True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                print('CẢNH BÁO: FFmpeg chưa được cài đặt trên hệ thống.')
+                print('Script này yêu cầu FFmpeg để xử lý video.')
+                print('Vui lòng cài đặt FFmpeg thủ công:')
+                print('- Trên Ubuntu: sudo apt install -y ffmpeg')
+                print('- Sử dụng snap: sudo snap install ffmpeg')
+                print('- Trên macOS: brew install ffmpeg')
+                print('- Tải từ trang chủ: https://ffmpeg.org/download.html')
+        
+        if not ffmpeg_installed:
+            print('\nCẢNH BÁO: Script có thể không hoạt động đúng nếu không có FFmpeg!')
+            response = input("Bạn có muốn tiếp tục mà không có FFmpeg không? (y/n): ")
+            if response.lower() != 'y':
+                sys.exit(1)
+        
         # Thiết lập biến môi trường để tránh lặp
         new_env = os.environ.copy()
         new_env['VENV_ACTIVE'] = '1'
@@ -64,8 +142,13 @@ if __name__ == '__main__' and not os.environ.get('VENV_ACTIVE'):
         sys.exit(1)
 
 # Import sau khi đã chắc chắn chạy trong venv
-import ffmpeg
-import psutil
+try:
+    import ffmpeg
+    import psutil
+except ImportError as e:
+    print(f"Lỗi khi import thư viện cần thiết: {e}")
+    print("Vui lòng chắc chắn các thư viện đã được cài đặt đúng cách.")
+    sys.exit(1)
 
 import re
 import datetime
