@@ -2,6 +2,12 @@ import os
 import sys
 import subprocess
 import platform
+import re
+import datetime
+import tempfile
+import io
+import shutil
+from contextlib import contextmanager
 
 # Kiểm tra và hướng dẫn cài đặt các package cần thiết
 if __name__ == '__main__':
@@ -426,88 +432,121 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
             # Đường dẫn output cuối cùng
             final_output_path = os.path.join(output_folder, sanitize_filename(output_name))
             
-            # Kiểm tra xem có đủ RAM để xử lý trong bộ nhớ không
+            # Kiểm tra trường hợp file đích đã tồn tại
+            if os.path.exists(final_output_path):
+                print(f"File đích đã tồn tại: {final_output_path}. Bỏ qua.")
+                return True
+            
+            # Kiểm tra không gian trống trên đĩa
+            try:
+                output_dir = os.path.dirname(final_output_path)
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                disk_usage = shutil.disk_usage(output_dir)
+                free_space_gb = disk_usage.free / (1024**3)
+                print(f"Dung lượng trống trên ổ đĩa: {free_space_gb:.2f} GB")
+                
+                if free_space_gb < 2:  # Cần ít nhất 2GB không gian trống để an toàn
+                    print(f"CẢNH BÁO: Quá ít dung lượng trống trên ổ đĩa. Cần ít nhất 2GB")
+                    return False
+            except Exception as disk_err:
+                print(f"Lỗi khi kiểm tra dung lượng ổ đĩa: {disk_err}")
+            
+            # Kiểm tra RAM khả dụng
             file_size = get_file_size_gb(file_path)
             available_ram = check_available_ram()
-            use_ram = available_ram > (file_size + 5)  # Cần nhiều hơn kích thước file + 5GB
             
-            if use_ram:
-                print(f"Đủ RAM để xử lý file trong bộ nhớ ({available_ram:.2f}GB > {file_size + 5:.2f}GB)")
-                with temp_directory_in_memory(use_ram=True) as temp_dir:
-                    # Đường dẫn tạm thời trong RAM
-                    temp_output_path = os.path.join(temp_dir, sanitize_filename(output_name))
-                    
-                    # Xử lý tách audio trong RAM
-                    cmd = [
-                        'ffmpeg',
-                        '-i', file_path,
-                        '-map', '0:v',
-                        '-map', f'0:{selected_track[0]}',
-                        '-c', 'copy',
-                        '-y',
-                        temp_output_path
-                    ]
-                    
-                    result = subprocess.run(cmd, capture_output=True)
-                    
-                    if result.returncode == 0 and os.path.exists(temp_output_path):
-                        print(f"Video được tạo tạm thời trong RAM: {temp_output_path}")
-                        # Chuyển từ RAM sang ổ đĩa
-                        shutil.copy2(temp_output_path, final_output_path)
-                        print(f"Video đã được sao chép từ RAM sang ổ đĩa: {final_output_path}")
+            # Ưu tiên xử lý trong RAM nếu có đủ RAM
+            ram_required = file_size * 2  # Cần ít nhất 200% kích thước file
+            try_ram_first = available_ram > ram_required
+            
+            if try_ram_first:
+                print(f"Đủ RAM để xử lý file ({available_ram:.2f}GB > {ram_required:.2f}GB). Thử xử lý trong RAM...")
+                
+                # Xử lý trong RAM
+                ram_success = False
+                try:
+                    with temp_directory_in_memory(use_ram=True) as temp_dir:
+                        # Đường dẫn tạm thời trong RAM
+                        temp_output_path = os.path.join(temp_dir, sanitize_filename(output_name))
                         
-                        # Rename file gốc sau khi xử lý thành công
-                        new_source_path = os.path.join(os.path.dirname(file_path), sanitize_filename(source_name))
-                        os.rename(file_path, new_source_path)
-                        print(f"Renamed source file to: {source_name}")
+                        # Xử lý tách audio trong RAM
+                        cmd = [
+                            'ffmpeg',
+                            '-i', file_path,
+                            '-map', '0:v',
+                            '-map', f'0:{selected_track[0]}',
+                            '-c', 'copy',
+                            '-y',
+                            temp_output_path
+                        ]
                         
-                        # Ghi log
-                        log_processed_file(log_file, original_filename, os.path.basename(new_source_path))
-                        return True
-                    else:
-                        print(f"Failed to process {file_path} in RAM.")
-                        if result.stderr:
-                            stderr_text = result.stderr.decode('utf-8', errors='replace')
-                            print(f"Error: {stderr_text}")
-                        return False
-            else:
-                print(f"Không đủ RAM để xử lý trong bộ nhớ ({available_ram:.2f}GB < {file_size + 5:.2f}GB). Xử lý trực tiếp trên ổ đĩa.")
-                # Xử lý tách audio trực tiếp trên ổ đĩa
-                cmd = [
-                    'ffmpeg',
-                    '-i', file_path,
-                    '-map', '0:v',
-                    '-map', f'0:{selected_track[0]}',
-                    '-c', 'copy',
-                    '-y',
-                    final_output_path
-                ]
-
-                result = subprocess.run(cmd, capture_output=True)
-
-                if result.returncode == 0 and os.path.exists(final_output_path):
-                    print(f"Video saved to {final_output_path}.")
+                        print(f"Đang chạy lệnh trong RAM: {' '.join(cmd)}")
+                        result = subprocess.run(cmd, capture_output=True)
+                        
+                        if result.returncode == 0 and os.path.exists(temp_output_path):
+                            print(f"Xử lý trong RAM thành công. Di chuyển file tới: {final_output_path}")
+                            # Chuyển từ RAM sang ổ đĩa
+                            shutil.copy2(temp_output_path, final_output_path)
+                            ram_success = True
+                except Exception as ram_error:
+                    print(f"Lỗi khi xử lý trong RAM: {ram_error}")
+                    
+                # Nếu xử lý trong RAM thành công
+                if ram_success and os.path.exists(final_output_path):
+                    print(f"Video đã được lưu tới: {final_output_path}")
                     
                     # Rename file gốc sau khi xử lý thành công
                     new_source_path = os.path.join(os.path.dirname(file_path), sanitize_filename(source_name))
                     os.rename(file_path, new_source_path)
-                    print(f"Renamed source file to: {source_name}")
+                    print(f"Đã đổi tên file gốc thành: {source_name}")
                     
                     # Ghi log
                     log_processed_file(log_file, original_filename, os.path.basename(new_source_path))
                     return True
                 else:
-                    print(f"Failed to process {file_path}.")
-                    if result.stderr:
-                        stderr_text = result.stderr.decode('utf-8', errors='replace')
-                        print(f"Error: {stderr_text}")
-                    return False
+                    print("Xử lý trong RAM thất bại. Chuyển sang xử lý trực tiếp trên ổ đĩa...")
+            else:
+                print(f"Không đủ RAM để xử lý ({available_ram:.2f}GB < {ram_required:.2f}GB). Xử lý trực tiếp trên ổ đĩa.")
+            
+            # Nếu không đủ RAM hoặc xử lý trong RAM thất bại, xử lý trực tiếp trên ổ đĩa
+            print("Xử lý video trực tiếp trên ổ đĩa...")
+            cmd = [
+                'ffmpeg',
+                '-i', file_path,
+                '-map', '0:v',
+                '-map', f'0:{selected_track[0]}',
+                '-c', 'copy',
+                '-y',
+                final_output_path
+            ]
+            
+            print(f"Đang chạy lệnh trên ổ đĩa: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True)
+            
+            if result.returncode == 0 and os.path.exists(final_output_path):
+                print(f"Video đã được lưu thành công tới: {final_output_path}")
+                
+                # Rename file gốc sau khi xử lý thành công
+                new_source_path = os.path.join(os.path.dirname(file_path), sanitize_filename(source_name))
+                os.rename(file_path, new_source_path)
+                print(f"Đã đổi tên file gốc thành: {source_name}")
+                
+                # Ghi log
+                log_processed_file(log_file, original_filename, os.path.basename(new_source_path))
+                return True
+            else:
+                print(f"Xử lý thất bại: {file_path}")
+                if result.stderr:
+                    stderr_text = result.stderr.decode('utf-8', errors='replace')
+                    print(f"Lỗi: {stderr_text}")
+                return False
         else:
-            print(f"No audio found in {file_path}")
+            print(f"Không tìm thấy audio trong {file_path}")
             return False
             
     except Exception as e:
-        print(f"Exception while processing {file_path}: {e}")
+        print(f"Lỗi khi xử lý {file_path}: {e}")
         return False
 
 def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
@@ -535,39 +574,71 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
         sub_filename = sanitize_filename(f"{base_name}_{language}.srt")
         final_output_path = os.path.join(sub_root_folder, sub_filename)
         
-        print(f"Xử lý subtitle trong bộ nhớ RAM...")
-        with temp_directory_in_memory(use_ram=True) as temp_dir:
-            # Đường dẫn tạm thời trong RAM
-            temp_output_path = os.path.join(temp_dir, sub_filename)
+        # Kiểm tra nếu subtitle đã tồn tại
+        if os.path.exists(final_output_path):
+            print(f"Subtitle đã tồn tại: {final_output_path}. Bỏ qua.")
+            return True
+        
+        # Xử lý trực tiếp vào thư mục đích để tránh lỗi về dung lượng
+        print(f"Trích xuất subtitle trực tiếp vào: {final_output_path}")
+        
+        # Lệnh ffmpeg để trích xuất subtitle
+        cmd = [
+            'ffmpeg',
+            '-i', file_path,
+            '-map', f'0:{index}',
+            '-c:s', 'srt',
+            '-y',
+            final_output_path
+        ]
+        
+        print(f"Thực thi lệnh: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True)
+        
+        if result.returncode == 0 and os.path.exists(final_output_path):
+            print(f"Subtitle đã được trích xuất thành công: {final_output_path}")
             
-            # Lệnh ffmpeg để trích xuất subtitle vào RAM
-            cmd = [
-                'ffmpeg',
-                '-i', file_path,
-                '-map', f'0:{index}',
-                '-c:s', 'srt',
-                '-y',
-                temp_output_path
-            ]
+            # Ghi vào log
+            log_processed_file(log_file, os.path.basename(file_path), sub_filename)
+            return True
+        else:
+            print("Lỗi khi trích xuất subtitle")
+            if result.stderr:
+                stderr_text = result.stderr.decode('utf-8', errors='replace')
+                print(f"Error: {stderr_text}")
             
-            result = subprocess.run(cmd, capture_output=True)
-            
-            if result.returncode == 0 and os.path.exists(temp_output_path):
-                print(f"Subtitle được trích xuất tạm thời trong RAM: {temp_output_path}")
-                # Chuyển từ RAM sang ổ đĩa
-                shutil.copy2(temp_output_path, final_output_path)
-                print(f"Subtitle đã được sao chép từ RAM sang ổ đĩa: {final_output_path}")
+            # Thử phương pháp khác nếu cách trên thất bại
+            print("Thử phương pháp thay thế để trích xuất subtitle...")
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_output_path = os.path.join(temp_dir, sub_filename)
                 
-                # Ghi vào log
-                log_processed_file(log_file, os.path.basename(file_path), sub_filename)
-                return True
-            else:
-                print("Lỗi khi trích xuất subtitle trong RAM")
-                if result.stderr:
-                    stderr_text = result.stderr.decode('utf-8', errors='replace')
-                    print(f"Error: {stderr_text}")
-                return False
-            
+                alt_cmd = [
+                    'ffmpeg',
+                    '-i', file_path,
+                    '-map', f'0:{index}',
+                    '-f', 'srt',
+                    '-y',
+                    temp_output_path
+                ]
+                
+                print(f"Thực thi lệnh thay thế: {' '.join(alt_cmd)}")
+                alt_result = subprocess.run(alt_cmd, capture_output=True)
+                
+                if alt_result.returncode == 0 and os.path.exists(temp_output_path):
+                    print(f"Subtitle được trích xuất tạm thời: {temp_output_path}")
+                    # Di chuyển tới đường dẫn cuối cùng
+                    shutil.move(temp_output_path, final_output_path)
+                    print(f"Subtitle đã được di chuyển tới: {final_output_path}")
+                    
+                    # Ghi vào log
+                    log_processed_file(log_file, os.path.basename(file_path), sub_filename)
+                    return True
+                else:
+                    print("Không thể trích xuất subtitle bằng cả hai phương pháp")
+                    if alt_result.stderr:
+                        stderr_text = alt_result.stderr.decode('utf-8', errors='replace')
+                        print(f"Error: {stderr_text}")
+                    return False
     except Exception as e:
         print(f"Lỗi khi trích xuất subtitle: {e}")
         return False
@@ -642,19 +713,39 @@ def temp_directory_in_memory(use_ram=True):
     if use_ram:
         # Tạo thư mục tạm trong /dev/shm nếu có (Linux) hoặc sử dụng tempfile (macOS, Windows)
         if os.path.exists('/dev/shm') and os.access('/dev/shm', os.W_OK):
-            # Linux với /dev/shm (RAM disk)
-            temp_dir = tempfile.mkdtemp(dir='/dev/shm')
+            # Kiểm tra không gian trống trong /dev/shm
+            try:
+                shm_usage = shutil.disk_usage('/dev/shm')
+                shm_free_gb = shm_usage.free / (1024**3)
+                print(f"Dung lượng trống trong /dev/shm: {shm_free_gb:.2f} GB")
+                
+                # Nếu có ít nhất 1GB không gian trống thì dùng /dev/shm
+                if shm_free_gb >= 1:
+                    temp_dir = tempfile.mkdtemp(dir='/dev/shm')
+                    print(f"Sử dụng RAM disk (/dev/shm) để tạo thư mục tạm: {temp_dir}")
+                else:
+                    print(f"Không đủ dung lượng trong /dev/shm (chỉ còn {shm_free_gb:.2f} GB). Sử dụng ổ đĩa thay thế.")
+                    temp_dir = tempfile.mkdtemp()
+            except Exception as e:
+                print(f"Lỗi khi kiểm tra /dev/shm: {e}. Sử dụng ổ đĩa thay thế.")
+                temp_dir = tempfile.mkdtemp()
         else:
-            # macOS hoặc Windows (sử dụng tempfile thông thường)
-            temp_dir = tempfile.mkdtemp()
+            # macOS: thử sử dụng /private/tmp (thường nằm trong RAM)
+            if os.path.exists('/private/tmp') and os.access('/private/tmp', os.W_OK) and platform.system() == 'Darwin':
+                temp_dir = tempfile.mkdtemp(dir='/private/tmp')
+                print(f"Sử dụng /private/tmp trên macOS để tạo thư mục tạm: {temp_dir}")
+            else:
+                # Sử dụng tempfile thông thường (trên ổ đĩa)
+                temp_dir = tempfile.mkdtemp()
+                print(f"Sử dụng thư mục tạm trên ổ đĩa: {temp_dir}")
         
         try:
-            print(f"Tạo thư mục tạm trong RAM: {temp_dir}")
             yield temp_dir
         finally:
             try:
-                shutil.rmtree(temp_dir)
-                print(f"Đã xóa thư mục tạm: {temp_dir}")
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    print(f"Đã xóa thư mục tạm: {temp_dir}")
             except Exception as e:
                 print(f"Lỗi khi xóa thư mục tạm: {e}")
     else:
@@ -671,16 +762,51 @@ def main():
     original_folder = "Original"
     log_file = os.path.join(".", "Subtitles", "processed_files.log")
 
+    # Tạo các thư mục cần thiết
     create_folder(vn_folder)
     create_folder(original_folder)
     create_folder(os.path.join(".", "Subtitles"))
 
+    # Kiểm tra dung lượng ổ đĩa
+    try:
+        disk_usage = shutil.disk_usage(".")
+        total_gb = disk_usage.total / (1024**3)
+        free_gb = disk_usage.free / (1024**3)
+        used_gb = disk_usage.used / (1024**3)
+        percent_free = (free_gb / total_gb) * 100
+        
+        print(f"=== THÔNG TIN HỆ THỐNG ===")
+        print(f"Ổ đĩa:")
+        print(f"  Tổng dung lượng: {total_gb:.2f} GB")
+        print(f"  Đã sử dụng: {used_gb:.2f} GB")
+        print(f"  Còn trống: {free_gb:.2f} GB ({percent_free:.1f}%)")
+        
+        if percent_free < 10:
+            print("\nCẢNH BÁO: Ổ đĩa của bạn còn rất ít dung lượng trống. Có thể gặp lỗi khi xử lý file lớn.")
+    except Exception as e:
+        print(f"Không thể kiểm tra dung lượng ổ đĩa: {e}")
+
     # Kiểm tra và hiển thị thông tin về RAM
     available_ram = check_available_ram()
-    print(f"Hệ thống có {available_ram:.2f} GB RAM khả dụng")
-    print(f"Các file lớn hơn {available_ram - 5:.2f} GB sẽ được xử lý trực tiếp trên ổ đĩa")
-    print(f"Các file nhỏ hơn sẽ được xử lý trong RAM để tăng tốc độ")
-    print(f"Tất cả subtitle sẽ được xử lý trong RAM bất kể kích thước file")
+    print(f"\nRAM khả dụng: {available_ram:.2f} GB")
+    
+    # Kiểm tra không gian trong /dev/shm nếu có
+    if os.path.exists('/dev/shm'):
+        try:
+            shm_usage = shutil.disk_usage('/dev/shm')
+            shm_free_gb = shm_usage.free / (1024**3)
+            shm_total_gb = shm_usage.total / (1024**3)
+            print(f"RAM disk (/dev/shm): {shm_total_gb:.2f} GB, còn trống: {shm_free_gb:.2f} GB")
+        except Exception as e:
+            print(f"Không thể kiểm tra /dev/shm: {e}")
+    
+    # Cập nhật thông tin chiến lược xử lý
+    print(f"\n=== CHIẾN LƯỢC XỬ LÝ ===")
+    print(f"1. Ưu tiên xử lý trong RAM để tối ưu tốc độ")
+    print(f"2. Nếu có đủ RAM (200% kích thước file), sẽ xử lý trong RAM")
+    print(f"3. Nếu xử lý trong RAM thất bại, sẽ tự động chuyển sang xử lý trên ổ đĩa")
+    print(f"4. Trích xuất subtitle trực tiếp vào thư mục đích")
+    print(f"======================\n")
 
     # Đọc danh sách file đã xử lý
     processed_files, processed_signatures = read_processed_files(log_file)
@@ -688,39 +814,82 @@ def main():
     try:
         mkv_files = [f for f in os.listdir(input_folder) if f.lower().endswith(".mkv")]
         if not mkv_files:
-            print("No MKV files found in the folder.")
+            print("Không tìm thấy file MKV nào trong thư mục hiện tại.")
             return
 
         for mkv_file in mkv_files:
             file_path = os.path.join(input_folder, mkv_file)
-            print(f"Processing file: {file_path}")
+            print(f"\n===== ĐANG XỬ LÝ FILE: {file_path} =====")
             
             # Hiển thị kích thước file
             file_size = get_file_size_gb(file_path)
-            print(f"Kích thước file: {file_size:.2f} GB")
-
+            
             # Kiểm tra file đã xử lý bằng tên và signature
             file_signature = get_file_signature(file_path)
             if mkv_file in processed_files:
-                print(f"File {mkv_file} was processed as {processed_files[mkv_file]['new_name']} on {processed_files[mkv_file]['time']}. Skipping.")
+                print(f"File {mkv_file} đã được xử lý thành {processed_files[mkv_file]['new_name']} vào {processed_files[mkv_file]['time']}. Bỏ qua.")
                 continue
             elif file_signature and file_signature in processed_signatures:
-                print(f"File {mkv_file} has same content as processed file {processed_signatures[file_signature]['new_name']}. Skipping.")
+                print(f"File {mkv_file} có cùng nội dung với file đã xử lý {processed_signatures[file_signature]['new_name']}. Bỏ qua.")
                 continue
+
+            # Kiểm tra dung lượng trống trước khi xử lý
+            try:
+                disk_usage = shutil.disk_usage(".")
+                free_gb = disk_usage.free / (1024**3)
+                if free_gb < file_size * 1.5:
+                    print(f"CẢNH BÁO: Không đủ dung lượng trống trên ổ đĩa để xử lý an toàn. Cần ít nhất {file_size * 1.5:.2f} GB, hiện có {free_gb:.2f} GB")
+                    response = input("Bạn có muốn tiếp tục mặc dù có thể gặp lỗi? (y/n): ")
+                    if response.lower() != 'y':
+                        print("Bỏ qua file này.")
+                        continue
+            except Exception as e:
+                print(f"Không thể kiểm tra dung lượng ổ đĩa: {e}")
 
             # Đọc thông tin file một lần duy nhất
             try:
                 probe_data = ffmpeg.probe(file_path)
                 audio_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'audio']
                 subtitle_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'subtitle']
+                
+                # In thông tin streams để người dùng biết
+                print("\nThông tin streams:")
+                print("- Video streams:")
+                for i, stream in enumerate([s for s in probe_data['streams'] if s['codec_type'] == 'video']):
+                    width = stream.get('width', 'N/A')
+                    height = stream.get('height', 'N/A')
+                    codec = stream.get('codec_name', 'N/A')
+                    print(f"  Stream #{i}: {codec}, {width}x{height}")
+                
+                print("- Audio streams:")
+                for i, stream in enumerate(audio_streams):
+                    lang = stream.get('tags', {}).get('language', 'und')
+                    title = stream.get('tags', {}).get('title', '')
+                    channels = stream.get('channels', 'N/A')
+                    codec = stream.get('codec_name', 'N/A')
+                    lang_display = f"{get_language_abbreviation(lang)}"
+                    if title:
+                        lang_display += f" - {title}"
+                    print(f"  Stream #{stream.get('index', i)}: {codec}, {channels} channels, {lang_display}")
+                
+                print("- Subtitle streams:")
+                for i, stream in enumerate(subtitle_streams):
+                    lang = stream.get('tags', {}).get('language', 'und')
+                    title = stream.get('tags', {}).get('title', '')
+                    codec = stream.get('codec_name', 'N/A')
+                    lang_display = f"{get_language_abbreviation(lang)}"
+                    if title:
+                        lang_display += f" - {title}"
+                    print(f"  Stream #{stream.get('index', i)}: {codec}, {lang_display}")
+                
             except Exception as e:
-                print(f"Error probing file {file_path}: {e}")
+                print(f"Lỗi khi đọc thông tin file {file_path}: {e}")
                 # Nếu không thể đọc thông tin file, vẫn thử rename đơn giản
                 try:
                     new_path = rename_simple(file_path)
                     log_processed_file(log_file, mkv_file, os.path.basename(new_path))
                 except Exception as rename_err:
-                    print(f"Failed to rename: {rename_err}")
+                    print(f"Không thể đổi tên: {rename_err}")
                 continue 
 
             # Kiểm tra subtitle và audio tiếng Việt
@@ -735,7 +904,7 @@ def main():
             vie_subtitle_streams = [stream for stream in subtitle_streams
                                     if stream.get('tags', {}).get('language', 'und') == 'vie']
             if vie_subtitle_streams:
-                print(f"Phát hiện {len(vie_subtitle_streams)} subtitle tiếng Việt. Bắt đầu trích xuất trong RAM...")
+                print(f"\nPhát hiện {len(vie_subtitle_streams)} subtitle tiếng Việt. Bắt đầu trích xuất...")
                 for stream in vie_subtitle_streams:
                     subtitle_info = (
                         stream['index'],
@@ -748,9 +917,9 @@ def main():
             # Xử lý video nếu có audio tiếng Việt
             if has_vie_audio:
                 try:
-                    print("Phát hiện audio tiếng Việt. Bắt đầu xử lý...")
+                    print("\nPhát hiện audio tiếng Việt. Bắt đầu xử lý...")
                     # Tìm audio track tiếng Việt có nhiều kênh nhất
-                    vie_audio_tracks = [(i, stream.get('channels', 0), 'vie', 
+                    vie_audio_tracks = [(stream.get('index', i), stream.get('channels', 0), 'vie', 
                                       stream.get('tags', {}).get('title', 'VIE'))
                                       for i, stream in enumerate(audio_streams)
                                       if stream.get('tags', {}).get('language', 'und') == 'vie']
@@ -758,22 +927,23 @@ def main():
                         # Sắp xếp theo số kênh giảm dần
                         vie_audio_tracks.sort(key=lambda x: x[1], reverse=True)
                         selected_track = vie_audio_tracks[0]
+                        print(f"Chọn track audio tiếng Việt index={selected_track[0]} với {selected_track[1]} kênh")
                         extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data)
                         processed = True  # Đánh dấu file đã được xử lý
                 except Exception as e:
-                    print(f"Error processing audio: {e}")
+                    print(f"Lỗi khi xử lý audio: {e}")
 
             # Nếu không có cả subtitle và audio tiếng Việt HOẶC xử lý audio thất bại
             if (not has_vie_subtitle and not has_vie_audio) or not processed:
-                print(f"No Vietnamese subtitle and audio found or processing failed. Renaming file...")
+                print(f"\nKhông tìm thấy subtitle hoặc audio tiếng Việt hoặc xử lý thất bại. Chỉ đổi tên file...")
                 try:
                     new_path = rename_simple(file_path)
                     log_processed_file(log_file, mkv_file, os.path.basename(new_path))
                 except Exception as rename_err:
-                    print(f"Failed to rename: {rename_err}")
+                    print(f"Không thể đổi tên: {rename_err}")
 
     except Exception as e:
-        print(f"Error accessing input folder '{input_folder}': {e}")
+        print(f"Lỗi khi truy cập thư mục '{input_folder}': {e}")
 
 if __name__ == "__main__":
     main()
