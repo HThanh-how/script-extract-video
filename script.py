@@ -466,7 +466,7 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
                 # Xử lý trong RAM
                 ram_success = False
                 try:
-                    with temp_directory_in_memory(use_ram=True) as temp_dir:
+                    with temp_directory_in_memory(use_ram=True, file_size_gb=file_size) as temp_dir:
                         # Đường dẫn tạm thời trong RAM
                         temp_output_path = os.path.join(temp_dir, sanitize_filename(output_name))
                         
@@ -592,7 +592,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
             # Xử lý trong RAM
             ram_success = False
             try:
-                with temp_directory_in_memory(use_ram=True) as temp_dir:
+                with temp_directory_in_memory(use_ram=True, file_size_gb=None) as temp_dir:
                     # Đường dẫn tạm thời trong RAM
                     temp_output_path = os.path.join(temp_dir, sub_filename)
                     
@@ -758,51 +758,230 @@ def get_file_size_gb(file_path):
         return 0
 
 @contextmanager
-def temp_directory_in_memory(use_ram=True):
-    """Tạo thư mục tạm trong RAM hoặc trên đĩa tùy thuộc vào tham số use_ram."""
-    if use_ram:
-        # Tạo thư mục tạm trong /dev/shm nếu có (Linux) hoặc sử dụng tempfile (macOS, Windows)
+def temp_directory_in_memory(use_ram=True, file_size_gb=None):
+    """Tạo thư mục tạm trong RAM hoặc trên đĩa tùy thuộc vào tham số use_ram.
+    
+    Args:
+        use_ram (bool): Có sử dụng RAM không
+        file_size_gb (float, optional): Kích thước file đang xử lý theo GB, dùng để tính toán không gian cần thiết
+    """
+    if not use_ram:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            print(f"Tạo thư mục tạm trên ổ đĩa: {temp_dir}")
+            yield temp_dir
+        return
+    
+    # Tính toán không gian tối thiểu cần thiết dựa trên kích thước file nếu có
+    # Đối với subtitle, chỉ cần một phần nhỏ dung lượng, còn video cần nhiều hơn
+    if file_size_gb:
+        # Đối với file nhỏ, yêu cầu ít nhất 400MB
+        required_space_gb = max(0.4, file_size_gb * 0.5)
+        print(f"Cần ít nhất {required_space_gb:.2f} GB cho file {file_size_gb:.2f} GB")
+    else:
+        # Mặc định yêu cầu 1GB nếu không biết kích thước file
+        required_space_gb = 1.0
+    
+    # Tạo danh sách các vị trí RAM có thể sử dụng
+    ram_locations = []
+    
+    # 1. Ubuntu/Linux: Các vị trí RAM disk tiềm năng
+    if os.name == 'posix':
+        # /dev/shm - thường là RAM disk trên hầu hết các hệ thống Linux
         if os.path.exists('/dev/shm') and os.access('/dev/shm', os.W_OK):
-            # Kiểm tra không gian trống trong /dev/shm
+            ram_locations.append(('/dev/shm', 'RAM disk'))
+        
+        # /run/user/<uid> - thư mục người dùng trên systemd, thường nằm trong RAM
+        uid = os.getuid() if hasattr(os, 'getuid') else None
+        if uid is not None:
+            user_runtime_dir = f"/run/user/{uid}"
+            if os.path.exists(user_runtime_dir) and os.access(user_runtime_dir, os.W_OK):
+                ram_locations.append((user_runtime_dir, 'Runtime user directory'))
+        
+        # /run - thư mục runtime cho các tiến trình của hệ thống 
+        if os.path.exists('/run') and os.access('/run', os.W_OK):
+            ram_locations.append(('/run', 'Runtime directory'))
+        
+        # /tmp - có thể được cấu hình là tmpfs trên RAM trên một số hệ thống
+        if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+            ram_locations.append(('/tmp', 'Temporary directory'))
+    
+    # 2. macOS: Thử /private/tmp (có thể được lưu trữ trong RAM trên một số cấu hình)
+    if platform.system() == 'Darwin':
+        if os.path.exists('/private/tmp') and os.access('/private/tmp', os.W_OK):
+            ram_locations.append(('/private/tmp', 'macOS temporary directory'))
+    
+    # Kiểm tra từng vị trí và tìm nơi có không gian trống nhiều nhất
+    best_location = None
+    best_location_desc = None
+    max_free_space = 0
+    
+    print(f"Tìm kiếm vị trí lưu trữ tạm (yêu cầu ít nhất {required_space_gb:.2f} GB)...")
+    for location, desc in ram_locations:
+        try:
+            usage = shutil.disk_usage(location)
+            free_space_gb = usage.free / (1024**3)
+            print(f"- {desc} ({location}): {free_space_gb:.2f} GB trống")
+            
+            # Lưu lại vị trí có không gian trống lớn nhất
+            if free_space_gb > max_free_space:
+                max_free_space = free_space_gb
+                best_location = location
+                best_location_desc = desc
+        except Exception as e:
+            print(f"- {desc} ({location}): Không thể kiểm tra ({e})")
+    
+    # Tạo thư mục tạm trong vị trí tốt nhất nếu có đủ không gian
+    if best_location and max_free_space >= required_space_gb:
+        try:
+            temp_dir = tempfile.mkdtemp(dir=best_location)
+            print(f"Sử dụng {best_location_desc} ({max_free_space:.2f} GB trống) cho xử lý RAM: {temp_dir}")
             try:
-                shm_usage = shutil.disk_usage('/dev/shm')
-                shm_free_gb = shm_usage.free / (1024**3)
-                print(f"Dung lượng trống trong /dev/shm: {shm_free_gb:.2f} GB")
-                
-                # Nếu có ít nhất 1GB không gian trống thì dùng /dev/shm
-                if shm_free_gb >= 1:
-                    temp_dir = tempfile.mkdtemp(dir='/dev/shm')
-                    print(f"Sử dụng RAM disk (/dev/shm) để tạo thư mục tạm: {temp_dir}")
-                else:
-                    print(f"Không đủ dung lượng trong /dev/shm (chỉ còn {shm_free_gb:.2f} GB). Sử dụng ổ đĩa thay thế.")
-                    temp_dir = tempfile.mkdtemp()
-            except Exception as e:
-                print(f"Lỗi khi kiểm tra /dev/shm: {e}. Sử dụng ổ đĩa thay thế.")
-                temp_dir = tempfile.mkdtemp()
+                yield temp_dir
+            finally:
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir)
+                    print(f"Đã xóa thư mục tạm: {temp_dir}")
+            return
+        except Exception as e:
+            print(f"Lỗi khi tạo thư mục tạm trong {best_location}: {e}")
+    
+    # Nếu không có RAM disk nào hoặc không đủ không gian, sử dụng ổ đĩa thay thế
+    try:
+        # Cố gắng tạo thư mục tạm ưu tiên trong /tmp nếu có
+        if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+            temp_dir = tempfile.mkdtemp(dir='/tmp')
         else:
-            # macOS: thử sử dụng /private/tmp (thường nằm trong RAM)
-            if os.path.exists('/private/tmp') and os.access('/private/tmp', os.W_OK) and platform.system() == 'Darwin':
-                temp_dir = tempfile.mkdtemp(dir='/private/tmp')
-                print(f"Sử dụng /private/tmp trên macOS để tạo thư mục tạm: {temp_dir}")
-            else:
-                # Sử dụng tempfile thông thường (trên ổ đĩa)
-                temp_dir = tempfile.mkdtemp()
-                print(f"Sử dụng thư mục tạm trên ổ đĩa: {temp_dir}")
+            temp_dir = tempfile.mkdtemp()
+        
+        if best_location:
+            print(f"THÔNG BÁO: Không đủ không gian trong {best_location_desc} ({max_free_space:.2f} GB < {required_space_gb:.2f} GB)")
+            print(f"Sử dụng ổ đĩa thay thế: {temp_dir}")
+        else:
+            print(f"THÔNG BÁO: Không tìm thấy RAM disk phù hợp. Sử dụng ổ đĩa thay thế: {temp_dir}")
         
         try:
             yield temp_dir
         finally:
-            try:
-                if os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-                    print(f"Đã xóa thư mục tạm: {temp_dir}")
-            except Exception as e:
-                print(f"Lỗi khi xóa thư mục tạm: {e}")
-    else:
-        # Sử dụng tempfile thông thường (trên đĩa)
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                print(f"Đã xóa thư mục tạm: {temp_dir}")
+    except Exception as e:
+        print(f"Lỗi khi xử lý thư mục tạm: {e}")
+        # Fallback cuối cùng: sử dụng tempfile thông thường
         with tempfile.TemporaryDirectory() as temp_dir:
-            print(f"Tạo thư mục tạm trên đĩa: {temp_dir}")
+            print(f"Fallback: Sử dụng thư mục tạm trên ổ đĩa: {temp_dir}")
             yield temp_dir
+
+def check_git_available():
+    """Kiểm tra Git có sẵn trong hệ thống"""
+    try:
+        subprocess.run(['git', '--version'], capture_output=True, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("Warning: Git is not installed or not found in PATH")
+        return False
+
+def get_file_size_mb(file_path):
+    """Lấy kích thước file theo MB."""
+    try:
+        file_size = os.path.getsize(file_path)
+        file_size_mb = file_size / (1024 ** 2)  # Convert to MB
+        return file_size_mb
+    except Exception as e:
+        print(f"Lỗi khi lấy kích thước file: {e}")
+        return 0
+
+def auto_commit_subtitles(subtitle_folder):
+    """Tự động commit các file subtitle < 1MB lên git."""
+    if not check_git_available():
+        print("Git không có sẵn. Bỏ qua auto-commit.")
+        return False
+    
+    try:
+        # Kiểm tra xem có trong git repository không
+        result = subprocess.run(['git', 'rev-parse', '--git-dir'], 
+                              capture_output=True, cwd='.')
+        if result.returncode != 0:
+            print("Không phải git repository. Bỏ qua auto-commit.")
+            return False
+        
+        # Lấy danh sách file trong Subtitles folder
+        if not os.path.exists(subtitle_folder):
+            print(f"Thư mục {subtitle_folder} không tồn tại.")
+            return False
+        
+        files_to_commit = []
+        skipped_files = []
+        
+        for root, dirs, files in os.walk(subtitle_folder):
+            for file in files:
+                file_path = os.path.join(root, file)
+                file_size_mb = get_file_size_mb(file_path)
+                
+                if file_size_mb < 1.0:  # < 1MB
+                    relative_path = os.path.relpath(file_path, '.')
+                    files_to_commit.append(relative_path)
+                else:
+                    skipped_files.append((file, file_size_mb))
+        
+        if not files_to_commit:
+            print("Không có file subtitle nào < 1MB để commit.")
+            return True
+        
+        print(f"\n=== AUTO-COMMIT SUBTITLES ===")
+        print(f"Sẽ commit {len(files_to_commit)} file(s) < 1MB:")
+        for file_path in files_to_commit:
+            print(f"  - {file_path}")
+        
+        if skipped_files:
+            print(f"\nBỏ qua {len(skipped_files)} file(s) >= 1MB:")
+            for file_name, size_mb in skipped_files:
+                print(f"  - {file_name} ({size_mb:.2f} MB)")
+        
+        # Add files to git
+        for file_path in files_to_commit:
+            add_result = subprocess.run(['git', 'add', file_path], 
+                                       capture_output=True, cwd='.')
+            if add_result.returncode != 0:
+                print(f"Lỗi khi add file {file_path}: {add_result.stderr.decode()}")
+                return False
+        
+        # Check if there are changes to commit
+        status_result = subprocess.run(['git', 'status', '--porcelain'], 
+                                     capture_output=True, cwd='.')
+        if not status_result.stdout.strip():
+            print("Không có thay đổi mới để commit.")
+            return True
+        
+        # Commit with timestamp
+        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        commit_message = f"Auto-commit subtitles: {len(files_to_commit)} files - {current_time}"
+        
+        commit_result = subprocess.run(['git', 'commit', '-m', commit_message], 
+                                     capture_output=True, cwd='.')
+        
+        if commit_result.returncode == 0:
+            print(f"✅ Đã commit thành công: {commit_message}")
+            
+            # Thử push nếu có remote
+            try:
+                push_result = subprocess.run(['git', 'push'], 
+                                           capture_output=True, cwd='.')
+                if push_result.returncode == 0:
+                    print("✅ Đã push lên remote repository thành công.")
+                else:
+                    print("⚠️ Commit thành công nhưng không thể push. Có thể cần setup remote hoặc authentication.")
+            except Exception as push_err:
+                print(f"⚠️ Không thể push: {push_err}")
+            
+            return True
+        else:
+            print(f"❌ Lỗi khi commit: {commit_result.stderr.decode()}")
+            return False
+            
+    except Exception as e:
+        print(f"Lỗi trong quá trình auto-commit: {e}")
+        return False
 
 def main():
     if not check_ffmpeg_available():
@@ -810,7 +989,8 @@ def main():
     input_folder = "."  # Folder hiện tại
     vn_folder = "Lồng Tiếng - Thuyết Minh"
     original_folder = "Original"
-    log_file = os.path.join(".", "Subtitles", "processed_files.log")
+    subtitle_folder = os.path.join(".", "Subtitles")
+    log_file = os.path.join(subtitle_folder, "processed_files.log")
 
     # Tạo các thư mục cần thiết
     create_folder(vn_folder)
@@ -991,6 +1171,11 @@ def main():
                     log_processed_file(log_file, mkv_file, os.path.basename(new_path))
                 except Exception as rename_err:
                     print(f"Không thể đổi tên: {rename_err}")
+
+        # Auto-commit subtitles sau khi xử lý xong tất cả files
+        print("\n=== HOÀN THÀNH XỬ LÝ ===")
+        print("Bắt đầu auto-commit subtitle files...")
+        auto_commit_subtitles(subtitle_folder)
 
     except Exception as e:
         print(f"Lỗi khi truy cập thư mục '{input_folder}': {e}")
