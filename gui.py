@@ -440,11 +440,23 @@ class MKVProcessorGUI:
                             if hasattr(sys, '_MEIPASS'):
                                 # Thêm _MEIPASS vào path
                                 sys.path.insert(0, sys._MEIPASS)
+                            
+                            # Đảm bảo import được ffmpeg và psutil trước
+                            try:
+                                import ffmpeg  # type: ignore
+                                import psutil  # type: ignore
+                            except ImportError as e:
+                                self.log(f"Lỗi import dependencies: {str(e)}", "ERROR")
+                                self.log("Vui lòng build lại với: python build_complete.py", "ERROR")
+                                return
+                        
                         from script import main as process_main_func
                         self.log("Đã import script.py thành công", "INFO")
                     except ImportError as import_err:
                         self.log(f"Lỗi import script.py: {str(import_err)}", "ERROR")
-                        self.log("Vui lòng đảm bảo script.py có trong package", "ERROR")
+                        import traceback
+                        self.log(traceback.format_exc(), "ERROR")
+                        self.log("Vui lòng đảm bảo script.py và dependencies có trong package", "ERROR")
                         return
                 
                 if process_main_func:

@@ -1,12 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('D:\\HT\\script-extract-video\\ffmpeg_bin', 'ffmpeg_bin')]
+binaries = []
+hiddenimports = ['ffmpeg', 'ffmpeg._run', 'ffmpeg._probe', 'ffmpeg.nodes', 'psutil', 'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.scrolledtext', 'tkinter.messagebox', 'script', 'ffmpeg_helper']
+tmp_ret = collect_all('ffmpeg')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('psutil')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['gui.py'],
     pathex=[],
-    binaries=[],
-    datas=[('D:\\HT\\script-extract-video\\ffmpeg_bin', 'ffmpeg_bin')],
-    hiddenimports=['ffmpeg', 'psutil', 'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.scrolledtext', 'tkinter.messagebox', 'script', 'ffmpeg_helper'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

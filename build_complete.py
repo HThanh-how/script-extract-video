@@ -155,16 +155,20 @@ def build_executable():
     else:
         print("⚠️ Không tìm thấy FFmpeg local, sẽ cần cài đặt riêng")
     
-    # Hidden imports
+    # Hidden imports - đảm bảo bundle đầy đủ
     hidden_imports = [
-        "ffmpeg", "psutil", "tkinter", "tkinter.ttk",
+        "ffmpeg", "ffmpeg._run", "ffmpeg._probe", "ffmpeg.nodes",  # ffmpeg-python package
+        "psutil", 
+        "tkinter", "tkinter.ttk",
         "tkinter.filedialog", "tkinter.scrolledtext", "tkinter.messagebox",
         "script", "ffmpeg_helper"  # Đảm bảo import được các module này
     ]
     for imp in hidden_imports:
         pyinstaller_args.extend(["--hidden-import", imp])
     
-    # Không cần collect-submodules vì script.py và ffmpeg_helper.py sẽ tự bundle khi import
+    # Collect toàn bộ package ffmpeg để đảm bảo bundle đầy đủ
+    pyinstaller_args.extend(["--collect-all", "ffmpeg"])
+    pyinstaller_args.extend(["--collect-all", "psutil"])
     
     # macOS specific
     if platform_name == "mac":
