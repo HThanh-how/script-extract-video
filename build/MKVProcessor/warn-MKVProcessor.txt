@@ -73,7 +73,7 @@ missing module named collections.Iterator - imported by collections (conditional
 missing module named collections.Sequence - imported by collections (conditional), future.types.newrange (conditional)
 missing module named future_builtins - imported by future.builtins.misc (conditional)
 missing module named dummy_threading - imported by requests.cookies (optional), future.backports.http.cookiejar (optional)
-invalid module named script - imported by D:\HT\script-extract-video\gui.py (delayed, conditional, optional)
+invalid module named script - imported by D:\HT\script-extract-video\gui.py (delayed, optional)
 missing module named simplejson - imported by requests.compat (conditional, optional)
 missing module named annotationlib - imported by typing_extensions (conditional)
 missing module named zstandard - imported by urllib3.util.request (optional), urllib3.response (optional)

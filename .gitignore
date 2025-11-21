@@ -31,3 +31,4 @@ auto_push_config*.json
 .idea/
 .cursor/
 
+.env

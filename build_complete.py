@@ -195,6 +195,10 @@ def build_executable():
             "--osx-bundle-identifier", "com.mkvprocessor.app"
         ])
     
+    # Đảm bảo script.py cũng được copy dưới dạng data để có thể fallback load khi cần
+    script_path = Path("script.py").absolute()
+    pyinstaller_args.extend(["--add-data", f"{script_path}{os.pathsep}."])
+
     pyinstaller_args.append("gui.py")
     
     try:

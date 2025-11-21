@@ -9,6 +9,8 @@ import queue
 import os
 import sys
 import json
+import importlib
+import importlib.util
 from pathlib import Path
 
 import requests
@@ -19,6 +21,23 @@ from config_manager import load_user_config, save_user_config
 BASE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+
+def load_script_module():
+    try:
+        import script  # type: ignore
+        return script
+    except ModuleNotFoundError:
+        for candidate in ("script.py", "script.pyc"):
+            script_file = BASE_DIR / candidate
+            if script_file.exists():
+                spec = importlib.util.spec_from_file_location("script", script_file)
+                if spec and spec.loader:
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)  # type: ignore[attr-defined]
+                    sys.modules["script"] = module
+                    return module
+        raise
 
 # Kiểm tra xem đang chạy từ executable (PyInstaller) hay source code
 IS_EXECUTABLE = getattr(sys, 'frozen', False)
@@ -42,41 +61,25 @@ create_folder = None
 import_success = False
 
 try:
-    # Import từ script
-    from script import (
-        main as process_main,
+    script_module = load_script_module()
+    process_main = getattr(script_module, "main", None)
+    check_ffmpeg_available = getattr(script_module, "check_ffmpeg_available", None)
+    check_available_ram = getattr(script_module, "check_available_ram", None)
+    get_file_size_gb = getattr(script_module, "get_file_size_gb", None)
+    read_processed_files = getattr(script_module, "read_processed_files", None)
+    create_folder = getattr(script_module, "create_folder", None)
+    import_success = all([
+        process_main,
         check_ffmpeg_available,
         check_available_ram,
         get_file_size_gb,
         read_processed_files,
-        create_folder
-    )
-    import_success = True
-except ImportError as e:
-    # Nếu không import được
+        create_folder,
+    ])
+except Exception as e:
     import_error = str(e)
-    # Chỉ in lỗi nếu đang chạy từ source code (không phải executable)
     if not IS_EXECUTABLE:
-        print(f"Lỗi import: {import_error}")
-    # Nếu chạy từ executable, thử thêm path
-    elif hasattr(sys, '_MEIPASS'):
-        try:
-            sys.path.insert(0, sys._MEIPASS)
-            # Thử import lại
-            import ffmpeg  # type: ignore
-            import psutil  # type: ignore
-            from script import (
-                main as process_main,
-                check_ffmpeg_available,
-                check_available_ram,
-                get_file_size_gb,
-                read_processed_files,
-                create_folder
-            )
-            import_success = True
-        except Exception as ex:
-            print(f"Lỗi import trong executable: {ex}")
-            pass
+        print(f"Lỗi import script: {import_error}")
 
 
 class MKVProcessorGUI:
@@ -574,22 +577,10 @@ class MKVProcessorGUI:
                 if not process_main_func:
                     # Thử import lại
                     try:
-                        if IS_EXECUTABLE:
-                            # Khi chạy từ executable, script.py có thể ở trong _MEIPASS
-                            if hasattr(sys, '_MEIPASS'):
-                                # Thêm _MEIPASS vào path
-                                sys.path.insert(0, sys._MEIPASS)
-                            
-                            # Đảm bảo import được ffmpeg và psutil trước
-                            try:
-                                import ffmpeg  # type: ignore
-                                import psutil  # type: ignore
-                            except ImportError as e:
-                                self.log(f"Lỗi import dependencies: {str(e)}", "ERROR")
-                                self.log("Vui lòng build lại với: python build_complete.py", "ERROR")
-                                return
-                        
-                        from script import main as process_main_func
+                        script_module = load_script_module()
+                        process_main_func = getattr(script_module, "main", None)
+                        if not process_main_func:
+                            raise ImportError("Không tìm thấy hàm main trong script.py")
                         self.log("Đã import script.py thành công", "INFO")
                     except ImportError as import_err:
                         self.log(f"Lỗi import script.py: {str(import_err)}", "ERROR")
