@@ -9,6 +9,16 @@ import io
 import shutil
 from contextlib import contextmanager
 
+# Helper để chạy FFmpeg với path local nếu có
+def run_ffmpeg_command(cmd, **kwargs):
+    """Wrapper cho subprocess.run để tự động sử dụng FFmpeg local nếu có"""
+    try:
+        from ffmpeg_helper import get_ffmpeg_command
+        cmd = get_ffmpeg_command(cmd)
+    except ImportError:
+        pass  # Fallback về command gốc
+    return subprocess.run(cmd, **kwargs)
+
 # Kiểm tra và hướng dẫn cài đặt các package cần thiết
 if __name__ == '__main__':
     try:
@@ -85,7 +95,16 @@ if __name__ == '__main__':
             
         # Kiểm tra FFmpeg đã được cài đặt chưa
         try:
-            subprocess.check_call(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Sử dụng helper để tìm FFmpeg local
+            try:
+                from ffmpeg_helper import find_ffmpeg_binary
+                ffmpeg_path = find_ffmpeg_binary()
+                if ffmpeg_path:
+                    subprocess.check_call([ffmpeg_path, '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.check_call(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except ImportError:
+                subprocess.check_call(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             print("Đã tìm thấy FFmpeg trên hệ thống.")
         except (subprocess.CalledProcessError, FileNotFoundError):
             print("\nCẢNH BÁO: Không tìm thấy FFmpeg trên hệ thống!")
@@ -482,7 +501,7 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
                         ]
                         
                         print(f"Đang chạy lệnh trong RAM: {' '.join(cmd)}")
-                        result = subprocess.run(cmd, capture_output=True)
+                        result = run_ffmpeg_command(cmd, capture_output=True)
                         
                         if result.returncode == 0 and os.path.exists(temp_output_path):
                             print(f"Xử lý trong RAM thành công. Di chuyển file tới: {final_output_path}")
@@ -522,7 +541,7 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
             ]
             
             print(f"Đang chạy lệnh trên ổ đĩa: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True)
+            result = run_ffmpeg_command(cmd, capture_output=True)
             
             if result.returncode == 0 and os.path.exists(final_output_path):
                 print(f"Video đã được lưu thành công tới: {final_output_path}")
@@ -607,7 +626,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
                     ]
                     
                     print(f"Đang chạy lệnh trong RAM: {' '.join(cmd)}")
-                    result = subprocess.run(cmd, capture_output=True)
+                    result = run_ffmpeg_command(cmd, capture_output=True)
                     
                     if result.returncode == 0 and os.path.exists(temp_output_path):
                         print(f"Trích xuất trong RAM thành công. Di chuyển file tới: {final_output_path}")
@@ -643,7 +662,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
         ]
         
         print(f"Đang chạy lệnh trên ổ đĩa: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True)
+        result = run_ffmpeg_command(cmd, capture_output=True)
         
         if result.returncode == 0 and os.path.exists(final_output_path):
             print(f"Subtitle đã được trích xuất thành công: {final_output_path}")
@@ -672,7 +691,7 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
                 ]
                 
                 print(f"Đang chạy lệnh thay thế: {' '.join(alt_cmd)}")
-                alt_result = subprocess.run(alt_cmd, capture_output=True)
+                alt_result = run_ffmpeg_command(alt_cmd, capture_output=True)
                 
                 if alt_result.returncode == 0 and os.path.exists(temp_output_path):
                     print(f"Subtitle được trích xuất tạm thời: {temp_output_path}")
@@ -727,13 +746,17 @@ def get_file_signature(file_path):
         return None
 
 def check_ffmpeg_available():
-    """Kiểm tra FFmpeg có sẵn trong hệ thống"""
+    """Kiểm tra FFmpeg có sẵn - sử dụng helper để tìm local FFmpeg"""
     try:
-        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Error: FFmpeg is not installed or not found in PATH")
-        return False
+        from ffmpeg_helper import check_ffmpeg_available as check_local
+        return check_local()
+    except ImportError:
+        # Fallback nếu không có helper
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False
 
 def check_available_ram():
     """Kiểm tra lượng RAM còn trống trong hệ thống."""
