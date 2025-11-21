@@ -853,19 +853,19 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data, file_signat
             print(f"Subtitle đã được trích xuất thành công: {final_output_path}")
             
             # Ghi vào log
-                log_processed_file(
-                    log_file,
-                    os.path.basename(file_path),
-                    sub_filename,
-                    signature=file_signature,
-                    metadata={
-                        "category": "subtitle",
-                        "language": language,
-                        "output_path": os.path.abspath(final_output_path),
-                        "local_path": os.path.abspath(final_output_path),
-                    },
-                )
-                return final_output_path
+            log_processed_file(
+                log_file,
+                os.path.basename(file_path),
+                sub_filename,
+                signature=file_signature,
+                metadata={
+                    "category": "subtitle",
+                    "language": language,
+                    "output_path": os.path.abspath(final_output_path),
+                    "local_path": os.path.abspath(final_output_path),
+                },
+            )
+            return final_output_path
         else:
             print("Lỗi khi trích xuất subtitle trực tiếp")
             if result.stderr:

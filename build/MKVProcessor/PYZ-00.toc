@@ -640,6 +640,7 @@
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\\Lib\\gettext.py',
    'PYMODULE'),
+  ('github_sync', 'D:\\HT\\script-extract-video\\github_sync.py', 'PYMODULE'),
   ('glob',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\\Lib\\glob.py',
@@ -1135,6 +1136,7 @@
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\\Lib\\runpy.py',
    'PYMODULE'),
+  ('script', 'D:\\HT\\script-extract-video\\script.py', 'PYMODULE'),
   ('secrets',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.2544.0_x64__qbz5n2kfra8p0\\Lib\\secrets.py',

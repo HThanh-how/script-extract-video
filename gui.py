@@ -94,6 +94,7 @@ class MKVProcessorGUI:
         
         # Biến trạng thái
         self.is_processing = False
+        self.processing_error = False
         self.config = load_user_config()
         self.current_folder = tk.StringVar(value=self.config.get("input_folder", "."))
         self.auto_upload_var = tk.BooleanVar(value=self.config.get("auto_upload", False))
@@ -332,6 +333,8 @@ class MKVProcessorGUI:
         
     def log(self, message, level="INFO"):
         """Thêm message vào log queue"""
+        if level == "ERROR":
+            self.processing_error = True
         self.log_queue.put((message, level))
         
     def write_log(self, message, level="INFO"):
@@ -565,6 +568,7 @@ class MKVProcessorGUI:
         self.process_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.progress.start()
+        self.processing_error = False
         self.log_text.delete(1.0, tk.END)
         self.log(f"Bắt đầu xử lý {len(mkv_files)} file MKV...", "INFO")
         
@@ -645,8 +649,12 @@ class MKVProcessorGUI:
         self.process_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.progress.stop()
-        self.log("Hoàn thành xử lý!", "SUCCESS")
-        messagebox.showinfo("Hoàn thành", "Đã xử lý xong tất cả file!")
+        if self.processing_error:
+            self.log("Quá trình kết thúc nhưng có lỗi. Xem log chi tiết.", "WARNING")
+            messagebox.showwarning("Hoàn thành (có lỗi)", "Đã kết thúc nhưng xuất hiện lỗi. Vui lòng xem log để biết chi tiết.")
+        else:
+            self.log("Hoàn thành xử lý!", "SUCCESS")
+            messagebox.showinfo("Hoàn thành", "Đã xử lý xong tất cả file!")
         
     def view_processed_log(self):
         """Mở thư mục logs và hiển thị file JSON mới nhất."""
