@@ -131,18 +131,18 @@ def build_executable():
     output_name = "MKVProcessor"
     
     # Tùy chọn PyInstaller - sử dụng python -m PyInstaller để tránh lỗi PATH
+    # KHÔNG dùng --add-data cho script.py và ffmpeg_helper.py vì chúng sẽ tự bundle khi import
     pyinstaller_args = [
         sys.executable, "-m", "PyInstaller",
         "--name", output_name,
         "--onefile",  # 1 file duy nhất
         "--windowed",  # GUI mode
-        "--add-data", f"script.py{os.pathsep}.",
-        "--add-data", f"ffmpeg_helper.py{os.pathsep}.",
     ]
     
-    # Bundle FFmpeg nếu có
+    # Bundle FFmpeg vào executable (sẽ extract tự động khi chạy)
     if check_ffmpeg_local():
         ffmpeg_bin_dir = Path("ffmpeg_bin").absolute()
+        # Bundle FFmpeg vào executable, sẽ extract vào thư mục tạm khi chạy
         if platform_name == "win":
             pyinstaller_args.extend([
                 "--add-data", f"{ffmpeg_bin_dir}{os.pathsep}ffmpeg_bin"
@@ -151,17 +151,20 @@ def build_executable():
             pyinstaller_args.extend([
                 "--add-data", f"{ffmpeg_bin_dir}{os.pathsep}ffmpeg_bin"
             ])
-        print("✅ Sẽ bundle FFmpeg vào executable")
+        print("✅ Sẽ bundle FFmpeg vào executable (sẽ extract tự động khi chạy)")
     else:
         print("⚠️ Không tìm thấy FFmpeg local, sẽ cần cài đặt riêng")
     
     # Hidden imports
     hidden_imports = [
         "ffmpeg", "psutil", "tkinter", "tkinter.ttk",
-        "tkinter.filedialog", "tkinter.scrolledtext", "tkinter.messagebox"
+        "tkinter.filedialog", "tkinter.scrolledtext", "tkinter.messagebox",
+        "script", "ffmpeg_helper"  # Đảm bảo import được các module này
     ]
     for imp in hidden_imports:
         pyinstaller_args.extend(["--hidden-import", imp])
+    
+    # Không cần collect-submodules vì script.py và ffmpeg_helper.py sẽ tự bundle khi import
     
     # macOS specific
     if platform_name == "mac":
@@ -182,62 +185,42 @@ def build_executable():
 
 
 def create_portable_package():
-    """Tạo package portable hoàn chỉnh"""
+    """Tạo package - CHỈ 1 FILE EXE DUY NHẤT"""
     platform_name, ext, arch = get_platform_spec()
     
-    print("\n📦 Tạo package portable hoàn chỉnh...")
+    print("\n📦 Tạo package - CHỈ 1 FILE DUY NHẤT...")
+    print("   (FFmpeg đã được bundle vào trong executable)")
     
-    # Tạo tên package với architecture đúng
-    if platform_name == "win":
-        if arch == "x64":
-            arch_name = "win64"
-        else:
-            arch_name = "win32"
-    elif platform_name == "mac":
-        if arch == "arm64":
-            arch_name = "arm64"
-        else:
-            arch_name = "x64"  # Intel
-    else:  # Linux
-        arch_name = arch
-    package_name = f"MKVProcessor_Portable_{platform_name}_{arch_name}"
-    package_dir = Path("dist") / package_name
-    
-    # Tạo thư mục
-    if package_dir.exists():
-        shutil.rmtree(package_dir)
-    package_dir.mkdir(parents=True)
-    
-    # Copy executable - tìm file đúng tên
+    # Tìm executable
     exe_name = "MKVProcessor"
     if platform_name == "win":
         exe_name += ".exe"
     elif platform_name == "mac":
         exe_name += ".app"
     
-    # Tìm executable (có thể có suffix khác)
     exe_path = Path("dist") / exe_name
     if not exe_path.exists():
         # Thử tìm file khác trong dist
         dist_files = list(Path("dist").glob("MKVProcessor*"))
         if dist_files:
             exe_path = dist_files[0]
-    if exe_path.exists():
-        if platform_name == "mac":
-            shutil.copytree(exe_path, package_dir / exe_name)
-        else:
-            shutil.copy2(exe_path, package_dir / exe_name)
-        print(f"✅ Đã copy executable")
-    else:
+    
+    if not exe_path.exists():
         print(f"❌ Không tìm thấy executable tại {exe_path}")
         return False
     
-    # Copy FFmpeg nếu có
-    if check_ffmpeg_local():
-        ffmpeg_bin_dir = Path("ffmpeg_bin")
-        package_ffmpeg_dir = package_dir / "ffmpeg_bin"
-        shutil.copytree(ffmpeg_bin_dir, package_ffmpeg_dir)
-        print(f"✅ Đã copy FFmpeg vào package")
+    # Tính kích thước
+    size_mb = exe_path.stat().st_size / (1024 * 1024)
+    
+    print(f"\n✅ Đã tạo 1 FILE DUY NHẤT!")
+    print(f"   📁 File: {exe_path.absolute()}")
+    print(f"   📦 Kích thước: {size_mb:.2f} MB")
+    print(f"\n💡 Bạn có thể:")
+    print(f"   1. Copy file {exe_name} vào bất kỳ đâu")
+    print(f"   2. Chạy trực tiếp - KHÔNG CẦN FILE NÀO KHÁC!")
+    print(f"   3. FFmpeg đã được bundle bên trong, sẽ extract tự động khi chạy")
+    
+    return True
     
     # Tạo README
     readme_content = f"""# 🎬 MKV Processor - Portable Package
@@ -364,16 +347,34 @@ def main():
     
     # Build executable
     if build_executable():
-        # Tạo package
-        if create_portable_package():
+        # Tìm file exe đã build
+        exe_name = "MKVProcessor"
+        if platform_name == "win":
+            exe_name += ".exe"
+        elif platform_name == "mac":
+            exe_name += ".app"
+        
+        exe_path = Path("dist") / exe_name
+        if not exe_path.exists():
+            # Thử tìm file khác trong dist
+            dist_files = list(Path("dist").glob("MKVProcessor*"))
+            if dist_files:
+                exe_path = dist_files[0]
+                exe_name = exe_path.name
+        
+        if exe_path.exists():
+            size_mb = exe_path.stat().st_size / (1024 * 1024)
             print("\n" + "=" * 70)
             print("✅ HOÀN THÀNH!")
             print("=" * 70)
-            print("\n🎉 Bạn đã có một package HOÀN CHỈNH!")
-            print("   Chỉ cần copy thư mục dist/MKVProcessor_Portable_* và chia sẻ.")
-            print("   Người dùng chỉ cần giải nén và chạy - KHÔNG CẦN CÀI ĐẶT GÌ!")
+            print("\n🎉 Bạn đã có 1 FILE EXE DUY NHẤT!")
+            print(f"   📁 File: {exe_path.absolute()}")
+            print(f"   📦 Kích thước: {size_mb:.2f} MB")
+            print("\n💡 Chỉ cần copy file này và chia sẻ.")
+            print("✅ Người dùng chỉ cần double-click - KHÔNG CẦN CÀI ĐẶT GÌ!")
+            print("✅ FFmpeg đã được bundle bên trong, extract tự động khi chạy")
         else:
-            print("\n⚠️ Build executable thành công nhưng không tạo được package.")
+            print("\n⚠️ Build executable thành công nhưng không tìm thấy file output.")
     else:
         print("\n❌ Build thất bại.")
 

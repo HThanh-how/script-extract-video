@@ -12,9 +12,10 @@ def get_bundle_dir():
     """Lấy thư mục chứa executable (khi chạy từ PyInstaller)"""
     if getattr(sys, 'frozen', False):
         # Chạy từ executable (PyInstaller)
-        # PyInstaller tạo thư mục _MEIPASS tạm thời
+        # PyInstaller tạo thư mục _MEIPASS tạm thời để extract data files
         if hasattr(sys, '_MEIPASS'):
             # Khi chạy từ PyInstaller, data files được extract vào _MEIPASS
+            # FFmpeg sẽ ở trong _MEIPASS/ffmpeg_bin/
             return Path(sys._MEIPASS)
         else:
             # Fallback: thư mục chứa executable

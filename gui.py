@@ -44,6 +44,24 @@ except ImportError as e:
     # Chỉ in lỗi nếu đang chạy từ source code (không phải executable)
     if not IS_EXECUTABLE:
         print(f"Lỗi import: {import_error}")
+    # Nếu chạy từ executable, thử thêm path
+    elif hasattr(sys, '_MEIPASS'):
+        try:
+            sys.path.insert(0, sys._MEIPASS)
+            # Thử import lại
+            import ffmpeg  # type: ignore
+            import psutil  # type: ignore
+            from script import (
+                main as process_main,
+                check_ffmpeg_available,
+                check_available_ram,
+                get_file_size_gb,
+                read_processed_files,
+                create_folder
+            )
+            import_success = True
+        except:
+            pass
 
 
 class MKVProcessorGUI:
@@ -411,11 +429,27 @@ class MKVProcessorGUI:
         # Chạy trong thread riêng
         def process():
             try:
-                # Chạy hàm main từ script.py với thư mục đã chọn
-                if process_main:
+                # Thử import lại script.py trong thread này (có thể cần thiết khi chạy từ executable)
+                process_main_func = process_main
+                
+                if not process_main_func:
+                    # Thử import lại
+                    try:
+                        if IS_EXECUTABLE:
+                            # Khi chạy từ executable, script.py có thể ở trong _MEIPASS
+                            if hasattr(sys, '_MEIPASS'):
+                                # Thêm _MEIPASS vào path
+                                sys.path.insert(0, sys._MEIPASS)
+                        from script import main as process_main_func
+                        self.log("Đã import script.py thành công", "INFO")
+                    except ImportError as import_err:
+                        self.log(f"Lỗi import script.py: {str(import_err)}", "ERROR")
+                        self.log("Vui lòng đảm bảo script.py có trong package", "ERROR")
+                        return
+                
+                if process_main_func:
                     # Redirect stdout/stderr để capture log
                     import io
-                    from contextlib import redirect_stdout, redirect_stderr
                     
                     old_stdout = sys.stdout
                     old_stderr = sys.stderr
@@ -427,19 +461,7 @@ class MKVProcessorGUI:
                         sys.stderr = log_capture
                         
                         # Chạy xử lý với thư mục đã chọn
-                        # script.py sẽ tự động chuyển thư mục
-                        if process_main:
-                            process_main(folder)
-                        elif IS_EXECUTABLE:
-                            # Nếu không import được nhưng đang chạy từ executable
-                            # Thử import lại trong thread này
-                            try:
-                                from script import main as process_main_retry
-                                process_main_retry(folder)
-                            except Exception as import_err:
-                                self.log(f"Lỗi: Không thể import script. {str(import_err)}", "ERROR")
-                        else:
-                            self.log("Không thể import script.py. Vui lòng cài đặt dependencies.", "ERROR")
+                        process_main_func(folder)
                         
                         # Lấy output
                         output = log_capture.getvalue()
