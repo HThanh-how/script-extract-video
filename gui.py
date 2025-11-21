@@ -8,7 +8,12 @@ import threading
 import queue
 import os
 import sys
+import json
 from pathlib import Path
+
+import requests
+
+from config_manager import load_user_config, save_user_config
 
 # Kiểm tra xem đang chạy từ executable (PyInstaller) hay source code
 IS_EXECUTABLE = getattr(sys, 'frozen', False)
@@ -81,115 +86,34 @@ class MKVProcessorGUI:
         
         # Biến trạng thái
         self.is_processing = False
-        self.current_folder = tk.StringVar(value=".")
+        self.config = load_user_config()
+        self.current_folder = tk.StringVar(value=self.config.get("input_folder", "."))
+        self.auto_upload_var = tk.BooleanVar(value=self.config.get("auto_upload", False))
+        self.repo_var = tk.StringVar(value=self.config.get("repo", "HThanh-how/Subtitles"))
+        self.branch_var = tk.StringVar(value=self.config.get("branch", "main"))
+        self.logs_dir_var = tk.StringVar(value=self.config.get("logs_dir", "logs"))
+        self.subtitle_dir_var = tk.StringVar(value=self.config.get("subtitle_dir", "subtitles"))
+        self.token_var = tk.StringVar(value=self.config.get("token", ""))
+        self.show_token = tk.BooleanVar(value=False)
         
         self.setup_ui()
         self.check_dependencies()
         self.process_log_queue()
         
     def setup_ui(self):
-        """Thiết lập giao diện người dùng"""
-        # Header
-        header_frame = ttk.Frame(self.root, padding="10")
-        header_frame.pack(fill=tk.X)
-        
-        title_label = ttk.Label(
-            header_frame, 
-            text="🎬 MKV Video Processing Toolkit",
-            font=("Arial", 16, "bold")
-        )
-        title_label.pack()
-        
-        subtitle_label = ttk.Label(
-            header_frame,
-            text="Tự động tách audio, trích xuất subtitle và đổi tên file video",
-            font=("Arial", 10)
-        )
-        subtitle_label.pack()
-        
-        # Separator
-        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=10, pady=5)
-        
-        # Folder selection
-        folder_frame = ttk.LabelFrame(self.root, text="📁 Thư mục xử lý", padding="10")
-        folder_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        folder_entry = ttk.Entry(folder_frame, textvariable=self.current_folder, width=60)
-        folder_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        
-        browse_btn = ttk.Button(
-            folder_frame,
-            text="Chọn thư mục...",
-            command=self.browse_folder
-        )
-        browse_btn.pack(side=tk.LEFT)
-        
-        # System info
-        info_frame = ttk.LabelFrame(self.root, text="ℹ️ Thông tin hệ thống", padding="10")
-        info_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.ffmpeg_status = ttk.Label(info_frame, text="FFmpeg: Đang kiểm tra...", foreground="orange")
-        self.ffmpeg_status.pack(anchor=tk.W)
-        
-        self.ram_status = ttk.Label(info_frame, text="RAM: Đang kiểm tra...", foreground="orange")
-        self.ram_status.pack(anchor=tk.W)
-        
-        self.folder_status = ttk.Label(info_frame, text="Thư mục: Chưa chọn", foreground="orange")
-        self.folder_status.pack(anchor=tk.W)
-        
-        # Control buttons
-        control_frame = ttk.Frame(self.root, padding="10")
-        control_frame.pack(fill=tk.X)
-        
-        self.process_btn = ttk.Button(
-            control_frame,
-            text="🚀 Bắt đầu xử lý",
-            command=self.start_processing,
-            state=tk.NORMAL
-        )
-        self.process_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_btn = ttk.Button(
-            control_frame,
-            text="⏹ Dừng",
-            command=self.stop_processing,
-            state=tk.DISABLED
-        )
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            control_frame,
-            text="📊 Xem log đã xử lý",
-            command=self.view_processed_log
-        ).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(
-            control_frame,
-            text="❌ Đóng",
-            command=self.root.quit
-        ).pack(side=tk.RIGHT, padx=5)
-        
-        # Progress bar
-        self.progress = ttk.Progressbar(
-            self.root,
-            mode='indeterminate',
-            length=400
-        )
-        self.progress.pack(fill=tk.X, padx=10, pady=5)
-        
-        # Log output
-        log_frame = ttk.LabelFrame(self.root, text="📝 Nhật ký xử lý", padding="10")
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        self.log_text = scrolledtext.ScrolledText(
-            log_frame,
-            height=20,
-            wrap=tk.WORD,
-            font=("Consolas", 9)
-        )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        
-        # Status bar
+        """Thiết lập giao diện người dùng hiện đại với tabs."""
+        self.setup_styles()
+        self.notebook = ttk.Notebook(self.root)
+        self.processing_tab = ttk.Frame(self.notebook, padding="15")
+        self.settings_tab = ttk.Frame(self.notebook, padding="15")
+        self.notebook.add(self.processing_tab, text="📂 Xử lý")
+        self.notebook.add(self.settings_tab, text="⚙️ Cài đặt")
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.build_processing_tab(self.processing_tab)
+        self.build_settings_tab(self.settings_tab)
+        self.update_github_status()
+
         self.status_bar = ttk.Label(
             self.root,
             text="Sẵn sàng",
@@ -197,6 +121,206 @@ class MKVProcessorGUI:
             anchor=tk.W
         )
         self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+
+    def setup_styles(self):
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
+        style.configure("Subtitle.TLabel", font=("Segoe UI", 11))
+        style.configure("Section.TLabel", font=("Segoe UI", 13, "bold"))
+        style.configure("StatusGood.TLabel", foreground="#1b873f")
+        style.configure("StatusWarn.TLabel", foreground="#d99428")
+        style.configure("StatusBad.TLabel", foreground="#c62828")
+
+    def build_processing_tab(self, parent):
+        header_frame = ttk.Frame(parent)
+        header_frame.pack(fill=tk.X)
+
+        ttk.Label(
+            header_frame,
+            text="🎬 MKV Video Processing Toolkit",
+            style="Title.TLabel"
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            header_frame,
+            text="Tự động tách audio, trích xuất subtitle, đổi tên & đồng bộ GitHub",
+            style="Subtitle.TLabel"
+        ).pack(anchor=tk.W, pady=(0, 10))
+
+        folder_frame = ttk.LabelFrame(parent, text="📁 Thư mục xử lý", padding=10)
+        folder_frame.pack(fill=tk.X, pady=5)
+
+        folder_entry = ttk.Entry(folder_frame, textvariable=self.current_folder)
+        folder_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(folder_frame, text="Chọn...", command=self.browse_folder).pack(side=tk.LEFT)
+
+        info_frame = ttk.LabelFrame(parent, text="🖥️ Trạng thái hệ thống", padding=10)
+        info_frame.pack(fill=tk.X, pady=5)
+
+        self.ffmpeg_status = ttk.Label(info_frame, text="FFmpeg: Đang kiểm tra...", style="StatusWarn.TLabel")
+        self.ffmpeg_status.pack(anchor=tk.W)
+
+        self.ram_status = ttk.Label(info_frame, text="RAM: Đang kiểm tra...", style="StatusWarn.TLabel")
+        self.ram_status.pack(anchor=tk.W)
+
+        self.folder_status = ttk.Label(info_frame, text="Thư mục: Chưa chọn", style="StatusWarn.TLabel")
+        self.folder_status.pack(anchor=tk.W)
+
+        self.github_status = ttk.Label(
+            info_frame,
+            text="GitHub: Chưa cấu hình",
+            style="StatusWarn.TLabel"
+        )
+        self.github_status.pack(anchor=tk.W)
+
+        control_frame = ttk.Frame(parent)
+        control_frame.pack(fill=tk.X, pady=10)
+
+        self.process_btn = ttk.Button(
+            control_frame,
+            text="🚀 Bắt đầu xử lý",
+            command=self.start_processing
+        )
+        self.process_btn.pack(side=tk.LEFT, padx=5)
+
+        self.stop_btn = ttk.Button(
+            control_frame,
+            text="⏹ Dừng",
+            command=self.stop_processing,
+            state=tk.DISABLED
+        )
+        self.stop_btn.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            control_frame,
+            text="📂 Mở thư mục logs",
+            command=self.view_processed_log
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            control_frame,
+            text="⚙️ Cài đặt",
+            command=lambda: self.notebook.select(self.settings_tab)
+        ).pack(side=tk.RIGHT, padx=5)
+
+        self.progress = ttk.Progressbar(parent, mode="indeterminate")
+        self.progress.pack(fill=tk.X, pady=5)
+
+        log_frame = ttk.LabelFrame(parent, text="📝 Nhật ký xử lý", padding=10)
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame,
+            height=18,
+            wrap=tk.WORD,
+            font=("Consolas", 10)
+        )
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+
+    def build_settings_tab(self, parent):
+        ttk.Label(parent, text="Cài đặt đồng bộ & GitHub", style="Section.TLabel").pack(anchor=tk.W)
+        ttk.Label(parent, text="Nhập token GitHub (fine-grained, chỉ repo Subtitles).", style="Subtitle.TLabel").pack(anchor=tk.W, pady=(0, 10))
+
+        form_frame = ttk.Frame(parent)
+        form_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Checkbutton(
+            form_frame,
+            text="Bật tự động upload lên GitHub (Subtitles repo)",
+            variable=self.auto_upload_var,
+            command=self.on_setting_change
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=5)
+
+        ttk.Label(form_frame, text="Repository").grid(row=1, column=0, sticky="e", pady=2, padx=5)
+        repo_entry = ttk.Entry(form_frame, textvariable=self.repo_var, width=40)
+        repo_entry.grid(row=1, column=1, sticky="we", pady=2)
+
+        ttk.Label(form_frame, text="Branch").grid(row=2, column=0, sticky="e", pady=2, padx=5)
+        ttk.Entry(form_frame, textvariable=self.branch_var).grid(row=2, column=1, sticky="we", pady=2)
+
+        ttk.Label(form_frame, text="Thư mục logs").grid(row=3, column=0, sticky="e", pady=2, padx=5)
+        ttk.Entry(form_frame, textvariable=self.logs_dir_var).grid(row=3, column=1, sticky="we", pady=2)
+
+        ttk.Label(form_frame, text="Thư mục subtitles").grid(row=4, column=0, sticky="e", pady=2, padx=5)
+        ttk.Entry(form_frame, textvariable=self.subtitle_dir_var).grid(row=4, column=1, sticky="we", pady=2)
+
+        ttk.Label(form_frame, text="GitHub Token").grid(row=5, column=0, sticky="ne", pady=2, padx=5)
+        token_entry = ttk.Entry(form_frame, textvariable=self.token_var, show="•")
+        token_entry.grid(row=5, column=1, sticky="we", pady=2)
+
+        ttk.Checkbutton(
+            form_frame,
+            text="Hiển thị token",
+            variable=self.show_token,
+            command=lambda: token_entry.config(show="" if self.show_token.get() else "•")
+        ).grid(row=6, column=1, sticky="w")
+
+        form_frame.columnconfigure(1, weight=1)
+
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(button_frame, text="💾 Lưu cấu hình", command=self.save_settings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="🔄 Kiểm tra kết nối", command=self.test_connection).pack(side=tk.LEFT, padx=5)
+
+        self.settings_status = ttk.Label(parent, text="", style="Subtitle.TLabel")
+        self.settings_status.pack(anchor=tk.W, pady=5)
+
+    def collect_settings_from_ui(self):
+        return {
+            "auto_upload": self.auto_upload_var.get(),
+            "repo": self.repo_var.get().strip(),
+            "branch": self.branch_var.get().strip() or "main",
+            "logs_dir": self.logs_dir_var.get().strip() or "logs",
+            "subtitle_dir": self.subtitle_dir_var.get().strip() or "subtitles",
+            "token": self.token_var.get().strip(),
+            "input_folder": self.current_folder.get(),
+        }
+
+    def on_setting_change(self):
+        self.update_github_status()
+
+    def save_settings(self):
+        data = self.collect_settings_from_ui()
+        save_user_config(data)
+        self.config.update(data)
+        self.settings_status.config(text="✅ Đã lưu cấu hình!")
+        self.update_github_status()
+
+    def test_connection(self):
+        data = self.collect_settings_from_ui()
+        if not data["auto_upload"]:
+            messagebox.showwarning("Thông tin", "Bạn chưa bật chế độ tự động upload.")
+            return
+        if not data["token"]:
+            messagebox.showerror("Thiếu token", "Vui lòng nhập GitHub token.")
+            return
+        try:
+            headers = {
+                "Authorization": f"Bearer {data['token']}",
+                "Accept": "application/vnd.github+json",
+            }
+            resp = requests.get(f"https://api.github.com/repos/{data['repo']}", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                messagebox.showinfo("Thành công", "Kết nối GitHub thành công!")
+                self.settings_status.config(text="✅ Kết nối GitHub thành công!", style="StatusGood.TLabel")
+            else:
+                messagebox.showerror("Lỗi", f"Không thể kết nối (mã {resp.status_code}). Kiểm tra repo/token.")
+                self.settings_status.config(text=f"❌ Lỗi kết nối: {resp.status_code}", style="StatusBad.TLabel")
+        except Exception as exc:
+            messagebox.showerror("Lỗi", f"Không thể kết nối GitHub: {exc}")
+            self.settings_status.config(text=f"❌ Lỗi kết nối: {exc}", style="StatusBad.TLabel")
+
+    def update_github_status(self):
+        if self.auto_upload_var.get() and self.token_var.get().strip():
+            self.github_status.config(text="GitHub: ✅ Đồng bộ bật", style="StatusGood.TLabel")
+        elif self.auto_upload_var.get():
+            self.github_status.config(text="GitHub: ⚠️ Thiếu token", style="StatusWarn.TLabel")
+        else:
+            self.github_status.config(text="GitHub: 🔌 Đang tắt", style="StatusWarn.TLabel")
         
     def log(self, message, level="INFO"):
         """Thêm message vào log queue"""
@@ -327,6 +451,7 @@ class MKVProcessorGUI:
             
             # Kiểm tra thư mục
             self.update_folder_status()
+            self.root.after(0, self.update_github_status)
             
         threading.Thread(target=check, daemon=True).start()
         
@@ -338,6 +463,8 @@ class MKVProcessorGUI:
         )
         if folder:
             self.current_folder.set(folder)
+            self.config["input_folder"] = folder
+            save_user_config(self.collect_settings_from_ui())
             self.update_folder_status()
             
     def update_folder_status(self):
@@ -381,6 +508,8 @@ class MKVProcessorGUI:
         if not folder or not os.path.exists(folder):
             messagebox.showerror("Lỗi", "Vui lòng chọn thư mục hợp lệ!")
             return
+        self.config["input_folder"] = folder
+        save_user_config(self.collect_settings_from_ui())
             
         # Kiểm tra FFmpeg
         ffmpeg_ok = False
@@ -524,31 +653,31 @@ class MKVProcessorGUI:
         messagebox.showinfo("Hoàn thành", "Đã xử lý xong tất cả file!")
         
     def view_processed_log(self):
-        """Xem log các file đã xử lý"""
-        folder = self.current_folder.get()
-        if not folder:
-            folder = "."
-            
-        log_file = os.path.join(folder, "Subtitles", "processed_files.log")
-        
-        if not os.path.exists(log_file):
-            messagebox.showinfo("Thông tin", "Chưa có file log nào được tạo.")
+        """Mở thư mục logs và hiển thị file JSON mới nhất."""
+        logs_dir = Path(self.logs_dir_var.get() or "logs")
+        if not logs_dir.exists():
+            messagebox.showinfo("Thông tin", f"Chưa có thư mục logs ({logs_dir}).")
             return
-            
-        # Mở file log trong cửa sổ mới
+
+        json_files = sorted(logs_dir.glob("*.json"), reverse=True)
+        if not json_files:
+            messagebox.showinfo("Thông tin", f"Chưa có file log trong {logs_dir}.")
+            return
+
+        latest = json_files[0]
         log_window = tk.Toplevel(self.root)
-        log_window.title("📊 Log các file đã xử lý")
-        log_window.geometry("800x600")
-        
+        log_window.title(f"📊 Log: {latest.name}")
+        log_window.geometry("900x600")
+
         text_widget = scrolledtext.ScrolledText(log_window, wrap=tk.WORD)
         text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
+
         try:
-            with open(log_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                text_widget.insert(1.0, content)
+            content = latest.read_text(encoding="utf-8")
+            parsed = json.loads(content)
+            text_widget.insert(1.0, json.dumps(parsed, ensure_ascii=False, indent=2))
         except Exception as e:
-            text_widget.insert(1.0, f"Lỗi khi đọc file log: {str(e)}")
+            text_widget.insert(1.0, f"Lỗi khi đọc log: {e}")
 
 
 def main():

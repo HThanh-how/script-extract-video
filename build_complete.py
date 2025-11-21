@@ -342,6 +342,14 @@ def main():
         print("❌ psutil: NOT FOUND")
         missing_deps.append("psutil")
     
+    # Kiểm tra requests
+    try:
+        import requests  # type: ignore
+        print("✅ requests: OK")
+    except ImportError:
+        print("❌ requests: NOT FOUND")
+        missing_deps.append("requests")
+    
     # Kiểm tra PyInstaller
     try:
         import PyInstaller

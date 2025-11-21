@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import subprocess
 import platform
 import re
@@ -7,7 +8,15 @@ import datetime
 import tempfile
 import io
 import shutil
+from pathlib import Path
 from contextlib import contextmanager
+from typing import Optional, List, Dict, Any
+
+from config_manager import load_user_config
+from github_sync import build_auto_push_config, RemoteSyncManager
+
+REMOTE_SYNC = None  # Sẽ được khởi tạo trong main nếu có config
+RUN_LOG_ENTRIES: List[Dict[str, Any]] = []
 
 # QUAN TRỌNG: Set FFmpeg binary path TRƯỚC KHI import ffmpeg
 # ffmpeg-python library sẽ sử dụng các biến môi trường này
@@ -170,13 +179,54 @@ def create_folder(folder_name):
     if not os.path.exists(folder_name):
         os.makedirs(folder_name)
 
-def log_processed_file(log_file, old_name, new_name):
-    """Ghi lại log file đã được xử lý với tên cũ và mới."""
+def log_processed_file(
+    log_file,
+    old_name,
+    new_name,
+    *,
+    signature=None,
+    metadata=None,
+):
+    """Ghi lại log file đã được xử lý và đồng bộ lên GitHub nếu cần."""
+    global RUN_LOG_ENTRIES
+    metadata = metadata or {}
     current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if signature is None:
+        signature = metadata.get("signature")
+    source_path = metadata.get("source_path")
+    if signature is None and source_path and os.path.exists(source_path):
+        signature = get_file_signature(source_path)
+
     file_path = os.path.join(".", old_name)
-    signature = get_file_signature(file_path) if os.path.exists(file_path) else ""
+    fallback_signature = ""
+    if signature:
+        fallback_signature = signature
+    elif os.path.exists(file_path):
+        fallback_signature = get_file_signature(file_path) or ""
+
     with open(log_file, "a", encoding='utf-8') as f:
-        f.write(f"{old_name}|{new_name}|{current_time}|{signature}\n")
+        f.write(f"{old_name}|{new_name}|{current_time}|{fallback_signature}\n")
+
+    # Đồng bộ lên GitHub nếu được cấu hình
+    remote_entry = {
+        "old_name": old_name,
+        "new_name": new_name,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "signature": signature or fallback_signature,
+        "category": metadata.get("category", "video"),
+        "output_path": metadata.get("output_path"),
+        "language": metadata.get("language"),
+        "notes": metadata.get("notes"),
+    }
+    RUN_LOG_ENTRIES.append(remote_entry)
+
+    if REMOTE_SYNC:
+        local_path = metadata.get("local_path") or metadata.get("output_path")
+        try:
+            REMOTE_SYNC.record_entry(remote_entry, local_path=local_path)
+        except Exception as sync_err:
+            print(f"[AUTO PUSH] Không thể ghi log lên GitHub: {sync_err}")
 
 def read_processed_files(log_file):
     """Đọc danh sách các file đã xử lý từ log."""
@@ -198,6 +248,65 @@ def read_processed_files(log_file):
                     if signature:
                         processed_signatures[signature] = info
     return processed_files, processed_signatures
+
+
+def convert_legacy_log_file(log_path: Path, logs_dir: Path) -> Optional[Path]:
+    """Chuyển file processed_files.log cũ sang JSON và xóa file cũ."""
+    if not log_path.exists():
+        return None
+
+    try:
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        print(f"[LOG] Không thể đọc {log_path}: {exc}")
+        return None
+
+    entries = []
+    for line in lines:
+        parts = line.strip().split("|")
+        if len(parts) < 2:
+            continue
+        entries.append(
+            {
+                "old_name": parts[0],
+                "new_name": parts[1],
+                "timestamp": parts[2] if len(parts) > 2 else datetime.datetime.utcnow().isoformat(),
+                "signature": parts[3] if len(parts) > 3 else "",
+                "category": "video",
+            }
+        )
+
+    if not entries:
+        return None
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    new_file = logs_dir / f"legacy_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    new_file.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    log_path.unlink(missing_ok=True)
+    print(f"[LOG] Đã chuyển {log_path} thành {new_file}")
+
+    if REMOTE_SYNC:
+        for entry in entries:
+            try:
+                REMOTE_SYNC.record_entry(entry, local_path=None)
+            except Exception as exc:
+                print(f"[AUTO PUSH] Không thể đồng bộ entry legacy: {exc}")
+
+    return new_file
+
+
+def write_run_log_snapshot(logs_dir: Path, prefix: str = "run") -> Optional[Path]:
+    global RUN_LOG_ENTRIES
+    if not RUN_LOG_ENTRIES:
+        return None
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    file_path = logs_dir / f"{prefix}_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    file_path.write_text(json.dumps(RUN_LOG_ENTRIES, ensure_ascii=False, indent=2), encoding="utf-8")
+    if REMOTE_SYNC:
+        REMOTE_SYNC.upload_log_snapshot(RUN_LOG_ENTRIES, filename_prefix=prefix)
+    RUN_LOG_ENTRIES = []
+    print(f"[LOG] Đã lưu log phiên làm việc tại {file_path}")
+    return file_path
 
 def sanitize_filename(name):
     """Loại bỏ các ký tự không hợp lệ trong tên tệp để tránh lỗi FFmpeg."""
@@ -347,7 +456,7 @@ def rename_simple(file_path):
         print(f"Error simple renaming file {file_path}: {e}")
         return file_path
 
-def extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data):
+def extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data, file_signature=None):
     """Tách video với audio theo yêu cầu."""
     try:
         audio_streams = [stream for stream in probe_data['streams'] if stream['codec_type'] == 'audio']
@@ -355,7 +464,17 @@ def extract_video_with_audio(file_path, vn_folder, original_folder, log_file, pr
         if not audio_streams:
             print(f"No audio found in {file_path}. Performing simple rename.")
             new_path = rename_simple(file_path)
-            log_processed_file(log_file, os.path.basename(file_path), os.path.basename(new_path))
+            log_processed_file(
+                log_file,
+                os.path.basename(file_path),
+                os.path.basename(new_path),
+                signature=file_signature,
+                metadata={
+                    "category": "video",
+                    "source_path": file_path,
+                    "output_path": os.path.abspath(new_path),
+                },
+            )
             return
 
         # Lấy thông tin audio đầu tiên để xác định trường hợp
@@ -382,13 +501,13 @@ def extract_video_with_audio(file_path, vn_folder, original_folder, log_file, pr
             if non_vietnamese_tracks:
                 # Chọn audio không phải tiếng Việt có nhiều kênh nhất
                 selected_track = non_vietnamese_tracks[0]
-                process_video(file_path, original_folder, selected_track, log_file, probe_data)
+                process_video(file_path, original_folder, selected_track, log_file, probe_data, file_signature=file_signature)
         else:
             # Trường hợp 2: Audio đầu tiên không phải tiếng Việt
             if vietnamese_tracks:
                 # Chọn audio tiếng Việt có nhiều kênh nhất
                 selected_track = vietnamese_tracks[0]
-                process_video(file_path, vn_folder, selected_track, log_file, probe_data)
+                process_video(file_path, vn_folder, selected_track, log_file, probe_data, file_signature=file_signature)
 
     except Exception as e:
         print(f"Exception while processing {file_path}: {e}")
@@ -427,7 +546,7 @@ def rename_file(file_path, audio_info, is_output=False):
         print(f"Error renaming file {file_path}: {e}")
         return file_path
 
-def process_video(file_path, output_folder, selected_track, log_file, probe_data):
+def process_video(file_path, output_folder, selected_track, log_file, probe_data, file_signature=None):
     """Xử lý video với track audio đã chọn và trích xuất subtitle."""
     try:
         original_filename = os.path.basename(file_path)
@@ -544,7 +663,17 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
                     print(f"Đã đổi tên file gốc thành: {source_name}")
                     
                     # Ghi log
-                    log_processed_file(log_file, original_filename, os.path.basename(new_source_path))
+                    log_processed_file(
+                        log_file,
+                        original_filename,
+                        os.path.basename(new_source_path),
+                        signature=file_signature,
+                        metadata={
+                            "category": "video",
+                            "source_path": file_path,
+                            "output_path": os.path.abspath(new_source_path),
+                        },
+                    )
                     return True
                 else:
                     print("Xử lý trong RAM thất bại. Chuyển sang xử lý trực tiếp trên ổ đĩa...")
@@ -575,7 +704,17 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
                 print(f"Đã đổi tên file gốc thành: {source_name}")
                 
                 # Ghi log
-                log_processed_file(log_file, original_filename, os.path.basename(new_source_path))
+                log_processed_file(
+                    log_file,
+                    original_filename,
+                    os.path.basename(new_source_path),
+                    signature=file_signature,
+                    metadata={
+                        "category": "video",
+                        "source_path": file_path,
+                        "output_path": os.path.abspath(new_source_path),
+                    },
+                )
                 return True
             else:
                 print(f"Xử lý thất bại: {file_path}")
@@ -591,7 +730,7 @@ def process_video(file_path, output_folder, selected_track, log_file, probe_data
         print(f"Lỗi khi xử lý {file_path}: {e}")
         return False
 
-def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
+def extract_subtitle(file_path, subtitle_info, log_file, probe_data, file_signature=None):
     """Trích xuất subtitle tiếng Việt từ file video."""
     try:
         # Tạo thư mục ./Subtitles nếu chưa tồn tại
@@ -619,7 +758,19 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
         # Kiểm tra nếu subtitle đã tồn tại
         if os.path.exists(final_output_path):
             print(f"Subtitle đã tồn tại: {final_output_path}. Bỏ qua.")
-            return True
+            log_processed_file(
+                log_file,
+                os.path.basename(file_path),
+                sub_filename,
+                signature=file_signature,
+                metadata={
+                    "category": "subtitle",
+                    "language": language,
+                    "output_path": os.path.abspath(final_output_path),
+                    "local_path": os.path.abspath(final_output_path),
+                },
+            )
+            return final_output_path
         
         # Kiểm tra RAM khả dụng - subtitle thường nhỏ nên yêu cầu ít RAM hơn
         available_ram = check_available_ram()
@@ -664,8 +815,19 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
                 print(f"Subtitle đã được lưu thành công tới: {final_output_path}")
                 
                 # Ghi vào log
-                log_processed_file(log_file, os.path.basename(file_path), sub_filename)
-                return True
+                log_processed_file(
+                    log_file,
+                    os.path.basename(file_path),
+                    sub_filename,
+                    signature=file_signature,
+                    metadata={
+                        "category": "subtitle",
+                        "language": language,
+                        "output_path": os.path.abspath(final_output_path),
+                        "local_path": os.path.abspath(final_output_path),
+                    },
+                )
+                return final_output_path
             else:
                 print("Xử lý trong RAM thất bại. Chuyển sang xử lý trực tiếp trên ổ đĩa...")
         else:
@@ -691,8 +853,19 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
             print(f"Subtitle đã được trích xuất thành công: {final_output_path}")
             
             # Ghi vào log
-            log_processed_file(log_file, os.path.basename(file_path), sub_filename)
-            return True
+                log_processed_file(
+                    log_file,
+                    os.path.basename(file_path),
+                    sub_filename,
+                    signature=file_signature,
+                    metadata={
+                        "category": "subtitle",
+                        "language": language,
+                        "output_path": os.path.abspath(final_output_path),
+                        "local_path": os.path.abspath(final_output_path),
+                    },
+                )
+                return final_output_path
         else:
             print("Lỗi khi trích xuất subtitle trực tiếp")
             if result.stderr:
@@ -723,17 +896,28 @@ def extract_subtitle(file_path, subtitle_info, log_file, probe_data):
                     print(f"Subtitle đã được di chuyển tới: {final_output_path}")
                     
                     # Ghi vào log
-                    log_processed_file(log_file, os.path.basename(file_path), sub_filename)
-                    return True
+                    log_processed_file(
+                        log_file,
+                        os.path.basename(file_path),
+                        sub_filename,
+                        signature=file_signature,
+                        metadata={
+                            "category": "subtitle",
+                            "language": language,
+                            "output_path": os.path.abspath(final_output_path),
+                            "local_path": os.path.abspath(final_output_path),
+                        },
+                    )
+                    return final_output_path
                 else:
                     print("Không thể trích xuất subtitle bằng cả hai phương pháp")
                     if alt_result.stderr:
                         stderr_text = alt_result.stderr.decode('utf-8', errors='replace')
                         print(f"Lỗi: {stderr_text}")
-                    return False
+                    return None
     except Exception as e:
         print(f"Lỗi khi trích xuất subtitle: {e}")
-        return False
+        return None
 
 def get_subtitle_info(file_path):
     """Lấy thông tin về các track subtitle trong file video."""
@@ -1109,6 +1293,58 @@ def main(input_folder=None):
     # Đọc danh sách file đã xử lý
     processed_files, processed_signatures = read_processed_files(log_file)
 
+    settings = load_user_config()
+    logs_dir = Path(settings.get("logs_dir", "logs"))
+
+    # Khởi tạo đồng bộ GitHub nếu có cấu hình
+    global REMOTE_SYNC, RUN_LOG_ENTRIES
+    RUN_LOG_ENTRIES = []
+    remote_entries = []
+    auto_config = build_auto_push_config(settings)
+    if auto_config:
+        print("\n[AUTO PUSH] Đã bật đồng bộ subtitle lên GitHub.")
+        REMOTE_SYNC = RemoteSyncManager(auto_config)
+        # Convert legacy log trên remote nếu còn
+        REMOTE_SYNC.convert_remote_legacy_log()
+        remote_entries = REMOTE_SYNC.load_remote_logs()
+        if remote_entries:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path = logs_dir / f"remote_sync_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            snapshot_path.write_text(json.dumps(remote_entries, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"[AUTO PUSH] Đã lưu log từ repo tại {snapshot_path}")
+        for entry in remote_entries:
+            if entry.get("category") != "video":
+                continue
+            info = {
+                "new_name": entry.get("new_name", ""),
+                "time": entry.get("timestamp", ""),
+                "signature": entry.get("signature", ""),
+            }
+            processed_files[entry.get("old_name", "")] = info
+            signature = entry.get("signature")
+            if signature:
+                processed_signatures[signature] = info
+    else:
+        REMOTE_SYNC = None
+
+    # Nếu local vẫn còn log cũ -> chuyển đổi
+    legacy_json = convert_legacy_log_file(Path(log_file), logs_dir)
+    if legacy_json and legacy_json.exists():
+        try:
+            legacy_entries = json.loads(legacy_json.read_text(encoding="utf-8"))
+            for entry in legacy_entries:
+                info = {
+                    "new_name": entry.get("new_name", ""),
+                    "time": entry.get("timestamp", ""),
+                    "signature": entry.get("signature", ""),
+                }
+                processed_files[entry.get("old_name", "")] = info
+                signature = entry.get("signature")
+                if signature:
+                    processed_signatures[signature] = info
+        except Exception as exc:
+            print(f"[LOG] Không thể đọc log đã chuyển: {exc}")
+
     try:
         mkv_files = [f for f in os.listdir(input_folder) if f.lower().endswith(".mkv")]
         if not mkv_files:
@@ -1185,7 +1421,17 @@ def main(input_folder=None):
                 # Nếu không thể đọc thông tin file, vẫn thử rename đơn giản
                 try:
                     new_path = rename_simple(file_path)
-                    log_processed_file(log_file, mkv_file, os.path.basename(new_path))
+                    log_processed_file(
+                        log_file,
+                        mkv_file,
+                        os.path.basename(new_path),
+                        signature=file_signature,
+                        metadata={
+                            "category": "video",
+                            "source_path": file_path,
+                            "output_path": os.path.abspath(new_path),
+                        },
+                    )
                 except Exception as rename_err:
                     print(f"Không thể đổi tên: {rename_err}")
                 continue 
@@ -1210,7 +1456,7 @@ def main(input_folder=None):
                         stream.get('tags', {}).get('title', ''),
                         stream.get('codec_name', '')
                     )
-                    extract_subtitle(file_path, subtitle_info, log_file, probe_data)
+                    extract_subtitle(file_path, subtitle_info, log_file, probe_data, file_signature=file_signature)
 
             # Xử lý video nếu có audio tiếng Việt
             if has_vie_audio:
@@ -1226,7 +1472,14 @@ def main(input_folder=None):
                         vie_audio_tracks.sort(key=lambda x: x[1], reverse=True)
                         selected_track = vie_audio_tracks[0]
                         print(f"Chọn track audio tiếng Việt index={selected_track[0]} với {selected_track[1]} kênh")
-                        extract_video_with_audio(file_path, vn_folder, original_folder, log_file, probe_data)
+                        extract_video_with_audio(
+                            file_path,
+                            vn_folder,
+                            original_folder,
+                            log_file,
+                            probe_data,
+                            file_signature=file_signature,
+                        )
                         processed = True  # Đánh dấu file đã được xử lý
                 except Exception as e:
                     print(f"Lỗi khi xử lý audio: {e}")
@@ -1236,7 +1489,17 @@ def main(input_folder=None):
                 print(f"\nKhông tìm thấy subtitle hoặc audio tiếng Việt hoặc xử lý thất bại. Chỉ đổi tên file...")
                 try:
                     new_path = rename_simple(file_path)
-                    log_processed_file(log_file, mkv_file, os.path.basename(new_path))
+                    log_processed_file(
+                        log_file,
+                        mkv_file,
+                        os.path.basename(new_path),
+                        signature=file_signature,
+                        metadata={
+                            "category": "video",
+                            "source_path": file_path,
+                            "output_path": os.path.abspath(new_path),
+                        },
+                    )
                 except Exception as rename_err:
                     print(f"Không thể đổi tên: {rename_err}")
 
@@ -1244,6 +1507,10 @@ def main(input_folder=None):
         print("\n=== HOÀN THÀNH XỬ LÝ ===")
         print("Bắt đầu auto-commit subtitle files...")
         auto_commit_subtitles(subtitle_folder)
+
+        if REMOTE_SYNC:
+            REMOTE_SYNC.flush()
+        write_run_log_snapshot(logs_dir)
 
     except Exception as e:
         print(f"Lỗi khi truy cập thư mục '{input_folder}': {e}")
