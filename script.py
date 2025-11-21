@@ -87,13 +87,41 @@ def download_git_portable() -> Optional[str]:
                     if chunk:
                         f.write(chunk)
 
+        temp_extract = tools_dir / "_tmp_extract"
+        if temp_extract.exists():
+            shutil.rmtree(temp_extract)
         with zipfile.ZipFile(tmp_zip, "r") as zip_ref:
-            zip_ref.extractall(tools_dir)
+            zip_ref.extractall(temp_extract)
         tmp_zip.unlink(missing_ok=True)
 
-        if git_exe.exists():
-            print("[AUTO-COMMIT] Đã tải Git portable thành công.")
-            return str(git_exe)
+        # Một số bản MinGit có thư mục gốc bao bọc, di chuyển nội dung lên trên
+        candidates = list(temp_extract.iterdir())
+        if len(candidates) == 1 and candidates[0].is_dir():
+            src_root = candidates[0]
+        else:
+            src_root = temp_extract
+
+        for item in src_root.iterdir():
+            dest = tools_dir / item.name
+            if dest.exists():
+                if dest.is_dir():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink()
+            shutil.move(str(item), dest)
+        shutil.rmtree(temp_extract, ignore_errors=True)
+
+        # Kiểm tra nhiều vị trí khả thi của git.exe (cmd/, bin/, mingw64/bin/)
+        possible_paths = [
+            tools_dir / "cmd" / "git.exe",
+            tools_dir / "bin" / "git.exe",
+            tools_dir / "mingw64" / "bin" / "git.exe",
+        ]
+        for candidate in possible_paths:
+            if candidate.exists():
+                print("[AUTO-COMMIT] Đã tải Git portable thành công.")
+                return str(candidate)
+
         print("[AUTO-COMMIT] Không tìm thấy git.exe sau khi giải nén.")
         return None
     except Exception as exc:

@@ -211,6 +211,12 @@ class MKVProcessorGUI:
 
         ttk.Button(
             control_frame,
+            text="📋 Copy log",
+            command=self.copy_log_text
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            control_frame,
             text="⚙️ Cài đặt",
             command=lambda: self.notebook.select(self.settings_tab)
         ).pack(side=tk.RIGHT, padx=5)
@@ -682,6 +688,16 @@ class MKVProcessorGUI:
             text_widget.insert(1.0, json.dumps(parsed, ensure_ascii=False, indent=2))
         except Exception as e:
             text_widget.insert(1.0, f"Lỗi khi đọc log: {e}")
+
+    def copy_log_text(self):
+        """Copy toàn bộ log hiện tại vào clipboard"""
+        content = self.log_text.get("1.0", tk.END).strip()
+        if not content:
+            messagebox.showinfo("Thông tin", "Chưa có log để copy.")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        self.status_bar.config(text="Đã copy log vào clipboard", foreground="#2563eb")
 
 
 def main():
