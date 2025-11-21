@@ -201,12 +201,13 @@ class RemoteSyncManager:
             return False
         return signature in self.signatures
 
-    def record_entry(self, entry: Dict[str, Any], local_file: Optional[str] = None) -> None:
+    def record_entry(self, entry: Dict[str, Any], local_path: Optional[str] = None, local_file: Optional[str] = None) -> None:
         """
         Ghi nhận một entry và upload file nếu cần.
         entry phải chứa `category`.
         """
         category = entry.get("category", "video")
+        file_path = local_path or local_file
 
         if category == "video":
             signature = entry.get("signature")
@@ -215,8 +216,8 @@ class RemoteSyncManager:
             self.signatures[signature] = entry
             self.pending_entries.append(entry)
         elif category == "subtitle":
-            if local_file and os.path.exists(local_file):
-                remote_path = self._upload_file(local_file, prefix=self.config.subtitle_dir)
+            if file_path and os.path.exists(file_path):
+                remote_path = self._upload_file(file_path, prefix=self.config.subtitle_dir)
                 entry["remote_path"] = remote_path
             self.pending_entries.append(entry)
         else:

@@ -8,15 +8,97 @@ import datetime
 import tempfile
 import io
 import shutil
+import zipfile
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
 
-from config_manager import load_user_config
+import requests
+
+from config_manager import load_user_config, get_config_dir
 from github_sync import build_auto_push_config, RemoteSyncManager
 
 REMOTE_SYNC = None  # Sẽ được khởi tạo trong main nếu có config
 RUN_LOG_ENTRIES: List[Dict[str, Any]] = []
+GIT_CACHED_PATH: Optional[str] = None
+GIT_RELEASE_API = "https://api.github.com/repos/git-for-windows/git/releases/latest"
+
+
+def find_git_executable() -> Optional[str]:
+    """Tìm đường dẫn git (portable hoặc hệ thống)."""
+    git_env = os.getenv("GIT_PORTABLE_PATH")
+    if git_env:
+        git_env_path = Path(git_env)
+        if git_env_path.is_dir():
+            git_env_path = git_env_path / "bin" / ("git.exe" if os.name == "nt" else "git")
+        if git_env_path.exists():
+            return str(git_env_path)
+
+    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    portable_git = base_dir / "git_portable" / "bin" / ("git.exe" if os.name == "nt" else "git")
+    if portable_git.exists():
+        return str(portable_git)
+
+    system_git = shutil.which("git")
+    if system_git:
+        return system_git
+    return None
+
+
+def download_git_portable() -> Optional[str]:
+    """Tải MinGit (64-bit) về thư mục cấu hình và trả về đường dẫn git.exe."""
+    if os.name != "nt":
+        return None
+    tools_dir = get_config_dir() / "git_portable"
+    git_exe = tools_dir / "bin" / "git.exe"
+    if git_exe.exists():
+        return str(git_exe)
+
+    try:
+        print("[AUTO-COMMIT] Đang tải Git portable...")
+        response = requests.get(GIT_RELEASE_API, timeout=30)
+        response.raise_for_status()
+        release = response.json()
+        assets = release.get("assets", [])
+        mingit_asset = None
+        for asset in assets:
+            name = asset.get("name", "")
+            if (
+                "MinGit" in name
+                and "64-bit" in name
+                and name.endswith(".zip")
+            ):
+                mingit_asset = asset
+                break
+        if not mingit_asset:
+            print("[AUTO-COMMIT] Không tìm thấy asset MinGit 64-bit trong release mới nhất.")
+            return None
+
+        download_url = mingit_asset.get("browser_download_url")
+        if not download_url:
+            return None
+
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        tmp_zip = tools_dir / "mingit.zip"
+        with requests.get(download_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(tmp_zip, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
+        with zipfile.ZipFile(tmp_zip, "r") as zip_ref:
+            zip_ref.extractall(tools_dir)
+        tmp_zip.unlink(missing_ok=True)
+
+        if git_exe.exists():
+            print("[AUTO-COMMIT] Đã tải Git portable thành công.")
+            return str(git_exe)
+        print("[AUTO-COMMIT] Không tìm thấy git.exe sau khi giải nén.")
+        return None
+    except Exception as exc:
+        print(f"[AUTO-COMMIT] Không thể tải Git portable: {exc}")
+        return None
 
 # QUAN TRỌNG: Set FFmpeg binary path TRƯỚC KHI import ffmpeg
 # ffmpeg-python library sẽ sử dụng các biến môi trường này
@@ -1102,14 +1184,29 @@ def temp_directory_in_memory(use_ram=True, file_size_gb=None):
             print(f"Fallback: Sử dụng thư mục tạm trên ổ đĩa: {temp_dir}")
             yield temp_dir
 
+def ensure_git_available() -> Optional[str]:
+    """Đảm bảo có git, tải MinGit nếu cần."""
+    global GIT_CACHED_PATH
+    if GIT_CACHED_PATH and Path(GIT_CACHED_PATH).exists():
+        return GIT_CACHED_PATH
+
+    git_cmd = find_git_executable()
+    if not git_cmd:
+        git_cmd = download_git_portable()
+
+    if git_cmd:
+        try:
+            subprocess.run([git_cmd, "--version"], capture_output=True, check=True)
+            GIT_CACHED_PATH = git_cmd
+            return git_cmd
+        except Exception:
+            pass
+    print("Warning: Git không khả dụng. Bỏ qua auto-commit.")
+    return None
+
+
 def check_git_available():
-    """Kiểm tra Git có sẵn trong hệ thống"""
-    try:
-        subprocess.run(['git', '--version'], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Warning: Git is not installed or not found in PATH")
-        return False
+    return ensure_git_available()
 
 def get_file_size_mb(file_path):
     """Lấy kích thước file theo MB."""
@@ -1123,13 +1220,13 @@ def get_file_size_mb(file_path):
 
 def auto_commit_subtitles(subtitle_folder):
     """Tự động commit các file subtitle < 1MB lên git."""
-    if not check_git_available():
-        print("Git không có sẵn. Bỏ qua auto-commit.")
+    git_cmd = check_git_available()
+    if not git_cmd:
         return False
     
     try:
         # Kiểm tra xem có trong git repository không
-        result = subprocess.run(['git', 'rev-parse', '--git-dir'], 
+        result = subprocess.run([git_cmd, 'rev-parse', '--git-dir'],
                               capture_output=True, cwd='.')
         if result.returncode != 0:
             print("Không phải git repository. Bỏ qua auto-commit.")
@@ -1170,14 +1267,14 @@ def auto_commit_subtitles(subtitle_folder):
         
         # Add files to git
         for file_path in files_to_commit:
-            add_result = subprocess.run(['git', 'add', file_path], 
+            add_result = subprocess.run([git_cmd, 'add', file_path],
                                        capture_output=True, cwd='.')
             if add_result.returncode != 0:
                 print(f"Lỗi khi add file {file_path}: {add_result.stderr.decode()}")
                 return False
         
         # Check if there are changes to commit
-        status_result = subprocess.run(['git', 'status', '--porcelain'], 
+        status_result = subprocess.run([git_cmd, 'status', '--porcelain'],
                                      capture_output=True, cwd='.')
         if not status_result.stdout.strip():
             print("Không có thay đổi mới để commit.")
@@ -1187,7 +1284,7 @@ def auto_commit_subtitles(subtitle_folder):
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         commit_message = f"Auto-commit subtitles: {len(files_to_commit)} files - {current_time}"
         
-        commit_result = subprocess.run(['git', 'commit', '-m', commit_message], 
+        commit_result = subprocess.run([git_cmd, 'commit', '-m', commit_message],
                                      capture_output=True, cwd='.')
         
         if commit_result.returncode == 0:
@@ -1195,7 +1292,7 @@ def auto_commit_subtitles(subtitle_folder):
             
             # Thử push nếu có remote
             try:
-                push_result = subprocess.run(['git', 'push'], 
+                push_result = subprocess.run([git_cmd, 'push'],
                                            capture_output=True, cwd='.')
                 if push_result.returncode == 0:
                     print("✅ Đã push lên remote repository thành công.")

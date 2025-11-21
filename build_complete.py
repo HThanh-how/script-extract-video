@@ -156,6 +156,17 @@ def build_executable():
     else:
         print("⚠️ Không tìm thấy FFmpeg local, sẽ cần cài đặt riêng")
     
+    # Bundle Git portable nếu có
+    git_portable_dir = Path("git_portable").absolute()
+    git_exe = git_portable_dir / "bin" / ("git.exe" if platform_name == "win" else "git")
+    if git_exe.exists():
+        pyinstaller_args.extend([
+            "--add-data", f"{git_portable_dir}{os.pathsep}git_portable"
+        ])
+        print("✅ Sẽ bundle Git portable vào executable (auto-commit không cần cài Git)")
+    else:
+        print("ℹ️ Không tìm thấy git_portable/. Bỏ qua bundle Git (auto-commit yêu cầu Git hệ thống).")
+
     # Hidden imports - đảm bảo bundle đầy đủ
     # QUAN TRỌNG: ffmpeg-python package được cài với tên "ffmpeg-python" nhưng import là "ffmpeg"
     hidden_imports = [
