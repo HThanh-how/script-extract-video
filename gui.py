@@ -10,6 +10,9 @@ import os
 import sys
 from pathlib import Path
 
+# Kiểm tra xem đang chạy từ executable (PyInstaller) hay source code
+IS_EXECUTABLE = getattr(sys, 'frozen', False)
+
 # Import các hàm từ script.py
 # Lưu ý: script.py cần ffmpeg và psutil, nhưng chúng ta sẽ import an toàn
 process_main = None
@@ -18,6 +21,7 @@ check_available_ram = None
 get_file_size_gb = None
 read_processed_files = None
 create_folder = None
+import_success = False
 
 try:
     # Thử import ffmpeg và psutil trước
@@ -33,10 +37,13 @@ try:
         read_processed_files,
         create_folder
     )
+    import_success = True
 except ImportError as e:
-    # Nếu không import được, sẽ hiển thị lỗi trong GUI
+    # Nếu không import được
     import_error = str(e)
-    print(f"Lỗi import: {import_error}")
+    # Chỉ in lỗi nếu đang chạy từ source code (không phải executable)
+    if not IS_EXECUTABLE:
+        print(f"Lỗi import: {import_error}")
 
 
 class MKVProcessorGUI:
@@ -224,11 +231,40 @@ class MKVProcessorGUI:
                     ))
                     self.log(f"Lỗi kiểm tra FFmpeg: {str(e)}", "WARNING")
             else:
-                self.root.after(0, lambda: self.ffmpeg_status.config(
-                    text="FFmpeg: ⚠️ Không thể kiểm tra (thiếu dependencies)",
-                    foreground="orange"
-                ))
-                self.log("Thiếu thư viện Python. Chạy: pip install -r requirements.txt", "WARNING")
+                # Chỉ hiển thị warning nếu đang chạy từ source code
+                if not IS_EXECUTABLE:
+                    self.root.after(0, lambda: self.ffmpeg_status.config(
+                        text="FFmpeg: ⚠️ Không thể kiểm tra (thiếu dependencies)",
+                        foreground="orange"
+                    ))
+                    self.log("Thiếu thư viện Python. Chạy: pip install -r requirements.txt", "WARNING")
+                else:
+                    # Nếu chạy từ executable, thử kiểm tra FFmpeg trực tiếp
+                    try:
+                        import subprocess
+                        result = subprocess.run(['ffmpeg', '-version'], 
+                                               capture_output=True, 
+                                               check=True)
+                        self.root.after(0, lambda: self.ffmpeg_status.config(
+                            text="FFmpeg: ✅ Đã cài đặt",
+                            foreground="green"
+                        ))
+                        self.log("FFmpeg đã được cài đặt", "SUCCESS")
+                    except:
+                        # Kiểm tra FFmpeg local trong package
+                        from ffmpeg_helper import check_ffmpeg_available as check_local
+                        if check_local():
+                            self.root.after(0, lambda: self.ffmpeg_status.config(
+                                text="FFmpeg: ✅ Đã bundle",
+                                foreground="green"
+                            ))
+                            self.log("FFmpeg đã được bundle trong package", "SUCCESS")
+                        else:
+                            self.root.after(0, lambda: self.ffmpeg_status.config(
+                                text="FFmpeg: ❌ Chưa cài đặt",
+                                foreground="red"
+                            ))
+                            self.log("FFmpeg chưa được cài đặt", "ERROR")
             
             # Kiểm tra RAM
             if check_available_ram:
@@ -244,10 +280,27 @@ class MKVProcessorGUI:
                         foreground="orange"
                     ))
             else:
-                self.root.after(0, lambda: self.ram_status.config(
-                    text="RAM: ⚠️ Không thể kiểm tra (thiếu dependencies)",
-                    foreground="orange"
-                ))
+                # Chỉ hiển thị warning nếu đang chạy từ source code
+                if not IS_EXECUTABLE:
+                    self.root.after(0, lambda: self.ram_status.config(
+                        text="RAM: ⚠️ Không thể kiểm tra (thiếu dependencies)",
+                        foreground="orange"
+                    ))
+                else:
+                    # Nếu chạy từ executable, thử import psutil trực tiếp
+                    try:
+                        import psutil
+                        memory = psutil.virtual_memory()
+                        ram_gb = memory.available / (1024 ** 3)
+                        self.root.after(0, lambda r=ram_gb: self.ram_status.config(
+                            text=f"RAM: ✅ {r:.2f} GB khả dụng",
+                            foreground="green"
+                        ))
+                    except:
+                        self.root.after(0, lambda: self.ram_status.config(
+                            text="RAM: ⚠️ Không thể kiểm tra",
+                            foreground="orange"
+                        ))
             
             # Kiểm tra thư mục
             self.update_folder_status()
@@ -307,7 +360,24 @@ class MKVProcessorGUI:
             return
             
         # Kiểm tra FFmpeg
-        if check_ffmpeg_available and not check_ffmpeg_available():
+        ffmpeg_ok = False
+        if check_ffmpeg_available:
+            ffmpeg_ok = check_ffmpeg_available()
+        elif IS_EXECUTABLE:
+            # Nếu chạy từ executable, thử kiểm tra trực tiếp
+            try:
+                from ffmpeg_helper import check_ffmpeg_available as check_local
+                ffmpeg_ok = check_local()
+            except:
+                try:
+                    import subprocess
+                    subprocess.run(['ffmpeg', '-version'], 
+                                  capture_output=True, check=True)
+                    ffmpeg_ok = True
+                except:
+                    ffmpeg_ok = False
+        
+        if not ffmpeg_ok:
             response = messagebox.askyesno(
                 "Cảnh báo",
                 "FFmpeg chưa được cài đặt. Bạn có muốn tiếp tục không?\n"
@@ -341,11 +411,7 @@ class MKVProcessorGUI:
         # Chạy trong thread riêng
         def process():
             try:
-                # Thay đổi thư mục làm việc
-                original_cwd = os.getcwd()
-                os.chdir(folder)
-                
-                # Chạy hàm main từ script.py
+                # Chạy hàm main từ script.py với thư mục đã chọn
                 if process_main:
                     # Redirect stdout/stderr để capture log
                     import io
@@ -360,8 +426,20 @@ class MKVProcessorGUI:
                         sys.stdout = log_capture
                         sys.stderr = log_capture
                         
-                        # Chạy xử lý
-                        process_main()
+                        # Chạy xử lý với thư mục đã chọn
+                        # script.py sẽ tự động chuyển thư mục
+                        if process_main:
+                            process_main(folder)
+                        elif IS_EXECUTABLE:
+                            # Nếu không import được nhưng đang chạy từ executable
+                            # Thử import lại trong thread này
+                            try:
+                                from script import main as process_main_retry
+                                process_main_retry(folder)
+                            except Exception as import_err:
+                                self.log(f"Lỗi: Không thể import script. {str(import_err)}", "ERROR")
+                        else:
+                            self.log("Không thể import script.py. Vui lòng cài đặt dependencies.", "ERROR")
                         
                         # Lấy output
                         output = log_capture.getvalue()
@@ -372,7 +450,6 @@ class MKVProcessorGUI:
                     finally:
                         sys.stdout = old_stdout
                         sys.stderr = old_stderr
-                        os.chdir(original_cwd)
                 else:
                     self.log("Không thể import script.py. Vui lòng kiểm tra lại.", "ERROR")
                     

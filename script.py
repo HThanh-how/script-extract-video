@@ -24,8 +24,8 @@ if __name__ == '__main__':
     try:
         # Thử import các module cần thiết
         try:
-            import ffmpeg
-            import psutil
+            import ffmpeg  # type: ignore
+            import psutil  # type: ignore
             # Nếu import thành công, tiếp tục chạy script
             print("Đã tìm thấy các thư viện cần thiết.")
         except ImportError as e:
@@ -132,8 +132,8 @@ if __name__ == '__main__':
         sys.exit(1)
 
 # Import các thư viện cần thiết
-import ffmpeg
-import psutil
+import ffmpeg  # type: ignore
+import psutil  # type: ignore
 
 import re
 import datetime
@@ -1006,10 +1006,32 @@ def auto_commit_subtitles(subtitle_folder):
         print(f"Lỗi trong quá trình auto-commit: {e}")
         return False
 
-def main():
+def main(input_folder=None):
+    """
+    Hàm main xử lý video
+    
+    Args:
+        input_folder: Thư mục chứa file MKV cần xử lý. 
+                     Nếu None, sử dụng thư mục hiện tại.
+    """
     if not check_ffmpeg_available():
         return
-    input_folder = "."  # Folder hiện tại
+    
+    # Sử dụng thư mục được chỉ định hoặc thư mục hiện tại
+    if input_folder is None:
+        input_folder = "."
+    
+    # Đảm bảo đường dẫn tuyệt đối
+    input_folder = os.path.abspath(input_folder)
+    
+    # Thay đổi thư mục làm việc nếu cần
+    original_cwd = os.getcwd()
+    need_restore_cwd = False
+    if input_folder != original_cwd:
+        os.chdir(input_folder)
+        need_restore_cwd = True
+        print(f"Đã chuyển sang thư mục: {input_folder}")
+    
     vn_folder = "Lồng Tiếng - Thuyết Minh"
     original_folder = "Original"
     subtitle_folder = os.path.join(".", "Subtitles")
@@ -1202,6 +1224,20 @@ def main():
 
     except Exception as e:
         print(f"Lỗi khi truy cập thư mục '{input_folder}': {e}")
+    finally:
+        # Khôi phục thư mục làm việc ban đầu
+        if need_restore_cwd:
+            try:
+                os.chdir(original_cwd)
+            except:
+                pass
 
 if __name__ == "__main__":
-    main()
+    import sys
+    # Cho phép truyền thư mục từ command line
+    if len(sys.argv) > 1:
+        folder = sys.argv[1]
+        print(f"Xử lý thư mục: {folder}")
+        main(folder)
+    else:
+        main()
