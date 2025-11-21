@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('D:\\HT\\script-extract-video\\ffmpeg_bin', 'ffmpeg_bin')]
 binaries = []
-hiddenimports = ['ffmpeg', 'ffmpeg._run', 'ffmpeg._probe', 'ffmpeg.nodes', 'ffmpeg._ffmpeg', 'ffmpeg._utils', 'ffmpeg._filters', 'ffmpeg._streams', 'psutil', 'psutil._common', 'psutil._pswindows', 'psutil._psutil_windows', 'psutil._psutil_linux', 'psutil._psutil_osx', 'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.scrolledtext', 'tkinter.messagebox', 'script', 'ffmpeg_helper']
+hiddenimports = ['ffmpeg', 'ffmpeg._run', 'ffmpeg._probe', 'ffmpeg.nodes', 'ffmpeg._ffmpeg', 'ffmpeg._utils', 'ffmpeg._filters', 'ffmpeg._streams', 'ffmpeg._probe_utils', 'ffmpeg._run_utils', 'psutil', 'psutil._common', 'psutil._pswindows', 'psutil._psutil_windows', 'psutil._psutil_linux', 'psutil._psutil_osx', 'tkinter', 'tkinter.ttk', 'tkinter.filedialog', 'tkinter.scrolledtext', 'tkinter.messagebox', 'script', 'ffmpeg_helper']
 hiddenimports += collect_submodules('ffmpeg')
 hiddenimports += collect_submodules('psutil')
 tmp_ret = collect_all('ffmpeg')

@@ -157,11 +157,13 @@ def build_executable():
         print("⚠️ Không tìm thấy FFmpeg local, sẽ cần cài đặt riêng")
     
     # Hidden imports - đảm bảo bundle đầy đủ
-    # Lưu ý: ffmpeg-python package có thể có tên khác, cần import đúng
+    # QUAN TRỌNG: ffmpeg-python package được cài với tên "ffmpeg-python" nhưng import là "ffmpeg"
     hidden_imports = [
-        # ffmpeg-python package - bundle đầy đủ
-        "ffmpeg", "ffmpeg._run", "ffmpeg._probe", "ffmpeg.nodes", "ffmpeg._ffmpeg",
+        # ffmpeg-python package - bundle đầy đủ TẤT CẢ modules
+        "ffmpeg", 
+        "ffmpeg._run", "ffmpeg._probe", "ffmpeg.nodes", "ffmpeg._ffmpeg",
         "ffmpeg._utils", "ffmpeg._filters", "ffmpeg._streams",
+        "ffmpeg._probe_utils", "ffmpeg._run_utils",
         # psutil package - bundle đầy đủ
         "psutil", "psutil._common", "psutil._pswindows", "psutil._psutil_windows",
         "psutil._psutil_linux", "psutil._psutil_osx",
@@ -174,7 +176,7 @@ def build_executable():
     for imp in hidden_imports:
         pyinstaller_args.extend(["--hidden-import", imp])
     
-    # Collect-submodules để bundle TẤT CẢ submodules (quan trọng!)
+    # Collect-submodules để bundle TẤT CẢ submodules (QUAN TRỌNG!)
     # Điều này đảm bảo bundle đầy đủ các module con của ffmpeg và psutil
     pyinstaller_args.extend(["--collect-submodules", "ffmpeg"])
     pyinstaller_args.extend(["--collect-submodules", "psutil"])
@@ -183,6 +185,9 @@ def build_executable():
     # Warnings về "not a package" là bình thường, PyInstaller vẫn bundle qua hidden-import
     pyinstaller_args.extend(["--collect-all", "ffmpeg"])
     pyinstaller_args.extend(["--collect-all", "psutil"])
+    
+    # QUAN TRỌNG: Đảm bảo import ffmpeg ngay từ đầu trong gui.py
+    # PyInstaller sẽ tự động bundle nếu thấy import statement
     
     # macOS specific
     if platform_name == "mac":
@@ -317,20 +322,50 @@ def main():
     # Kiểm tra xem đang chạy trong CI/CD không (không có stdin)
     is_ci = os.getenv('CI') == 'true' or os.getenv('GITHUB_ACTIONS') == 'true'
     
+    # Kiểm tra dependencies trước khi build
+    print("\n🔍 Kiểm tra dependencies...")
+    missing_deps = []
+    
+    # Kiểm tra ffmpeg-python
+    try:
+        import ffmpeg  # type: ignore
+        print("✅ ffmpeg-python: OK")
+    except ImportError:
+        print("❌ ffmpeg-python: NOT FOUND")
+        missing_deps.append("ffmpeg-python")
+    
+    # Kiểm tra psutil
+    try:
+        import psutil  # type: ignore
+        print("✅ psutil: OK")
+    except ImportError:
+        print("❌ psutil: NOT FOUND")
+        missing_deps.append("psutil")
+    
     # Kiểm tra PyInstaller
     try:
         import PyInstaller
+        print("✅ PyInstaller: OK")
     except ImportError:
-        print("\n⚠️ PyInstaller chưa được cài đặt.")
+        print("❌ PyInstaller: NOT FOUND")
+        missing_deps.append("pyinstaller")
+    
+    # Nếu thiếu dependencies, cài đặt hoặc thoát
+    if missing_deps:
+        print(f"\n⚠️ Thiếu {len(missing_deps)} dependencies: {', '.join(missing_deps)}")
         if is_ci:
-            print("Đang cài đặt PyInstaller...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
+            print("Đang tự động cài đặt...")
+            for dep in missing_deps:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", dep])
         else:
-            response = input("Cài đặt PyInstaller? (y/n): ")
+            response = input("Tự động cài đặt? (y/n): ")
             if response.lower() == 'y':
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
+                for dep in missing_deps:
+                    print(f"Đang cài đặt {dep}...")
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", dep])
             else:
-                print("❌ Cần PyInstaller để build. Thoát.")
+                print("❌ Cần cài đặt dependencies trước khi build. Thoát.")
+                print("   Chạy: pip install -r requirements.txt")
                 return
     
     # Tải FFmpeg nếu chưa có
@@ -391,6 +426,18 @@ def main():
             print("\n💡 Chỉ cần copy file này và chia sẻ.")
             print("✅ Người dùng chỉ cần double-click - KHÔNG CẦN CÀI ĐẶT GÌ!")
             print("✅ FFmpeg đã được bundle bên trong, extract tự động khi chạy")
+            
+            # Đề xuất test
+            print("\n" + "=" * 70)
+            print("🧪 TEST EXECUTABLE")
+            print("=" * 70)
+            print("💡 Để test executable, chạy:")
+            print("   python test_build.py")
+            print("\n   Hoặc test thủ công:")
+            print(f"   1. Chạy: {exe_path.name}")
+            print("   2. Kiểm tra GUI có mở được không")
+            print("   3. Kiểm tra 'FFmpeg: OK' và 'RAM: OK'")
+            print("   4. Test xử lý file MKV thật")
         else:
             print("\n⚠️ Build executable thành công nhưng không tìm thấy file output.")
     else:

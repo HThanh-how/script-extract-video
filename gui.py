@@ -13,8 +13,16 @@ from pathlib import Path
 # Kiểm tra xem đang chạy từ executable (PyInstaller) hay source code
 IS_EXECUTABLE = getattr(sys, 'frozen', False)
 
+# QUAN TRỌNG: Import ffmpeg và psutil NGAY TỪ ĐẦU để PyInstaller bundle
+# PyInstaller chỉ bundle những gì được import trực tiếp trong code
+try:
+    import ffmpeg  # type: ignore  # PyInstaller sẽ bundle package này
+    import psutil  # type: ignore  # PyInstaller sẽ bundle package này
+except ImportError:
+    # Nếu không import được, sẽ xử lý sau
+    pass
+
 # Import các hàm từ script.py
-# Lưu ý: script.py cần ffmpeg và psutil, nhưng chúng ta sẽ import an toàn
 process_main = None
 check_ffmpeg_available = None
 check_available_ram = None
@@ -24,11 +32,7 @@ create_folder = None
 import_success = False
 
 try:
-    # Thử import ffmpeg và psutil trước
-    import ffmpeg
-    import psutil
-    
-    # Nếu import được, mới import từ script
+    # Import từ script
     from script import (
         main as process_main,
         check_ffmpeg_available,
@@ -60,7 +64,8 @@ except ImportError as e:
                 create_folder
             )
             import_success = True
-        except:
+        except Exception as ex:
+            print(f"Lỗi import trong executable: {ex}")
             pass
 
 
