@@ -15,6 +15,11 @@ import requests
 
 from config_manager import load_user_config, save_user_config
 
+# Đảm bảo thư mục chứa script nằm trong sys.path
+BASE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 # Kiểm tra xem đang chạy từ executable (PyInstaller) hay source code
 IS_EXECUTABLE = getattr(sys, 'frozen', False)
 

@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.DS_Store
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# PyInstaller temp/dist
+*.manifest
+*.dll
+
+# Local configs/secrets
+config.json
+auto_push_config.json
+auto_push_config*.json
+
+# Editor/workspace
+.vscode/
+.idea/
+.cursor/
+
