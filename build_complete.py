@@ -137,6 +137,7 @@ def build_executable():
         "--name", output_name,
         "--onefile",  # 1 file duy nhất
         "--windowed",  # GUI mode
+        "--additional-hooks-dir", ".",  # Sử dụng hook files trong thư mục hiện tại
     ]
     
     # Bundle FFmpeg vào executable (sẽ extract tự động khi chạy)
@@ -156,17 +157,30 @@ def build_executable():
         print("⚠️ Không tìm thấy FFmpeg local, sẽ cần cài đặt riêng")
     
     # Hidden imports - đảm bảo bundle đầy đủ
+    # Lưu ý: ffmpeg-python package có thể có tên khác, cần import đúng
     hidden_imports = [
-        "ffmpeg", "ffmpeg._run", "ffmpeg._probe", "ffmpeg.nodes",  # ffmpeg-python package
-        "psutil", 
+        # ffmpeg-python package - bundle đầy đủ
+        "ffmpeg", "ffmpeg._run", "ffmpeg._probe", "ffmpeg.nodes", "ffmpeg._ffmpeg",
+        "ffmpeg._utils", "ffmpeg._filters", "ffmpeg._streams",
+        # psutil package - bundle đầy đủ
+        "psutil", "psutil._common", "psutil._pswindows", "psutil._psutil_windows",
+        "psutil._psutil_linux", "psutil._psutil_osx",
+        # tkinter - GUI
         "tkinter", "tkinter.ttk",
         "tkinter.filedialog", "tkinter.scrolledtext", "tkinter.messagebox",
-        "script", "ffmpeg_helper"  # Đảm bảo import được các module này
+        # Custom modules
+        "script", "ffmpeg_helper"
     ]
     for imp in hidden_imports:
         pyinstaller_args.extend(["--hidden-import", imp])
     
-    # Collect toàn bộ package ffmpeg để đảm bảo bundle đầy đủ
+    # Collect-submodules để bundle TẤT CẢ submodules (quan trọng!)
+    # Điều này đảm bảo bundle đầy đủ các module con của ffmpeg và psutil
+    pyinstaller_args.extend(["--collect-submodules", "ffmpeg"])
+    pyinstaller_args.extend(["--collect-submodules", "psutil"])
+    
+    # Collect-all để bundle toàn bộ package (có thể có warnings nhưng không sao)
+    # Warnings về "not a package" là bình thường, PyInstaller vẫn bundle qua hidden-import
     pyinstaller_args.extend(["--collect-all", "ffmpeg"])
     pyinstaller_args.extend(["--collect-all", "psutil"])
     
