@@ -9,6 +9,29 @@ import io
 import shutil
 from contextlib import contextmanager
 
+# QUAN TRỌNG: Set FFmpeg binary path TRƯỚC KHI import ffmpeg
+# ffmpeg-python library sẽ sử dụng các biến môi trường này
+try:
+    from ffmpeg_helper import find_ffmpeg_binary, find_ffprobe_binary
+    ffmpeg_path = find_ffmpeg_binary()
+    ffprobe_path = find_ffprobe_binary()
+    
+    if ffmpeg_path:
+        os.environ['FFMPEG_BINARY'] = ffmpeg_path
+        # Thêm vào PATH để ffmpeg-python tìm được
+        ffmpeg_dir = os.path.dirname(ffmpeg_path)
+        if ffmpeg_dir not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
+    
+    if ffprobe_path:
+        os.environ['FFPROBE_BINARY'] = ffprobe_path
+        # Thêm vào PATH
+        ffprobe_dir = os.path.dirname(ffprobe_path)
+        if ffprobe_dir not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = ffprobe_dir + os.pathsep + os.environ.get('PATH', '')
+except ImportError:
+    pass  # Nếu không import được, sẽ dùng system FFmpeg
+
 # Helper để chạy FFmpeg với path local nếu có
 def run_ffmpeg_command(cmd, **kwargs):
     """Wrapper cho subprocess.run để tự động sử dụng FFmpeg local nếu có"""

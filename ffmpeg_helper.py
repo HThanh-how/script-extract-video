@@ -16,7 +16,12 @@ def get_bundle_dir():
         if hasattr(sys, '_MEIPASS'):
             # Khi chạy từ PyInstaller, data files được extract vào _MEIPASS
             # FFmpeg sẽ ở trong _MEIPASS/ffmpeg_bin/
-            return Path(sys._MEIPASS)
+            bundle_path = Path(sys._MEIPASS)
+            # Debug: In ra để kiểm tra
+            if os.getenv('DEBUG_FFMPEG'):
+                print(f"[DEBUG] Bundle dir: {bundle_path}")
+                print(f"[DEBUG] FFmpeg bin dir: {bundle_path / 'ffmpeg_bin'}")
+            return bundle_path
         else:
             # Fallback: thư mục chứa executable
             return Path(sys.executable).parent
@@ -41,23 +46,36 @@ def find_ffmpeg_binary():
     # 1. Tìm trong thư mục bundle/ffmpeg_bin
     local_ffmpeg = bundle_dir / "ffmpeg_bin" / ffmpeg_name
     if local_ffmpeg.exists():
-        return str(local_ffmpeg.absolute())
+        ffmpeg_path = str(local_ffmpeg.absolute())
+        if os.getenv('DEBUG_FFMPEG'):
+            print(f"[DEBUG] Found FFmpeg at: {ffmpeg_path}")
+        return ffmpeg_path
     
     # 2. Tìm trong thư mục bundle (cùng thư mục với exe)
     local_ffmpeg = bundle_dir / ffmpeg_name
     if local_ffmpeg.exists():
-        return str(local_ffmpeg.absolute())
+        ffmpeg_path = str(local_ffmpeg.absolute())
+        if os.getenv('DEBUG_FFMPEG'):
+            print(f"[DEBUG] Found FFmpeg at: {ffmpeg_path}")
+        return ffmpeg_path
     
     # 3. Tìm trong PATH (system FFmpeg)
     try:
         result = subprocess.run(
             ['ffmpeg', '-version'],
             capture_output=True,
-            check=True
+            check=True,
+            timeout=5
         )
+        if os.getenv('DEBUG_FFMPEG'):
+            print("[DEBUG] Using system FFmpeg from PATH")
         return 'ffmpeg'  # Sử dụng system FFmpeg
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
+    
+    if os.getenv('DEBUG_FFMPEG'):
+        print(f"[DEBUG] FFmpeg not found in: {bundle_dir / 'ffmpeg_bin'}")
+        print(f"[DEBUG] FFmpeg not found in: {bundle_dir}")
     
     return None
 
